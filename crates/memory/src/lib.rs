@@ -7,7 +7,7 @@
 pub mod hot;
 pub mod episodic;
 pub mod consolidated;
+pub mod cache;
 
-pub use hot::*;
-pub use episodic::*;
-pub use consolidated::*;
+pub use hot::{HotMemory, Interaction, SessionState, SessionStatus, SlidingWindow, HotMemoryStats};
+pub use cache::{LLMCache, CachedResponse, CacheStats};
