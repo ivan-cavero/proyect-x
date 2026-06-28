@@ -206,12 +206,12 @@ Workspace Intelligence:
 
 #### Repository Setup
 
-- [ ] **Create workspace Cargo.toml** with all crate members
-- [ ] **Create rust-toolchain.toml** pinning to specific nightly
-- [ ] **Create .gitignore** (target, node_modules, .env, *.db, *.enc)
-- [ ] **Create .editorconfig** (indent: 4 spaces, charset: utf-8, eol: lf)
-- [ ] **Create .github/workflows/ci.yml** — `cargo test`, `cargo clippy`, `cargo fmt`
-- [ ] **Create .github/workflows/release.yml** — Build + upload binaries on tag
+- [x] **Create workspace Cargo.toml** with all crate members
+- [x] **Create rust-toolchain.toml** pinning to specific nightly
+- [x] **Create .gitignore** (target, node_modules, .env, *.db, *.enc)
+- [x] **Create .editorconfig** (indent: 4 spaces, charset: utf-8, eol: lf)
+- [x] **Create .github/workflows/ci.yml** — `cargo test`, `cargo clippy`, `cargo fmt`
+- [x] **Create .github/workflows/release.yml** — Build + upload binaries on tag
 - [ ] **Verify `cargo build --workspace` compiles clean**
 - [ ] **Verify `cargo clippy` passes with zero warnings**
 
