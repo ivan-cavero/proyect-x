@@ -1,0 +1,86 @@
+# Project-X Configuration
+# https://github.com/ivan-cavero/proyect-x
+
+[project]
+name = "test-proj"
+version = "0.1.0"
+
+# ─── Providers ────────────────────────────────────────
+
+[providers.openai]
+api_key = "keyring:openai"
+default_model = "gpt-5"
+
+[providers.anthropic]
+api_key = "keyring:anthropic"
+default_model = "claude-4-opus"
+
+[providers.gemini]
+api_key = "keyring:gemini"
+default_model = "gemini-2.5-pro"
+
+# ─── Roles ────────────────────────────────────────────
+
+[roles.architect]
+description = "System design and architecture"
+model = "claude-4-opus"
+temperature = 0.2
+system_prompt = "You are a senior software architect specialized in Rust systems."
+tools = ["filesystem", "web_search"]
+
+[roles.coder]
+description = "Code generation and implementation"
+model = "gpt-5"
+temperature = 0.3
+system_prompt = "You are an expert Rust engineer. Write production-quality code."
+tools = ["filesystem", "execute_command"]
+
+[roles.reviewer]
+description = "Code review and quality assurance"
+model = "gemini-2.5-pro"
+temperature = 0.2
+system_prompt = "You are a senior code reviewer. Analyze code critically."
+tools = ["filesystem"]
+
+[roles.security]
+description = "Security audit and vulnerability scanning"
+model = "claude-4-haiku"
+temperature = 0.1
+system_prompt = "You are a security auditor. Check for vulnerabilities."
+tools = ["filesystem", "grep"]
+
+[roles.tester]
+description = "Test generation and execution"
+model = "gpt-5"
+temperature = 0.2
+system_prompt = "You are a QA engineer. Generate comprehensive tests."
+tools = ["filesystem", "execute_command"]
+
+# ─── Goals ────────────────────────────────────────────
+
+[[goals]]
+name = "full-feature"
+description = "Complete feature development"
+agents = ["architect", "coder", "reviewer", "security", "tester"]
+gates = ["review.pass", "security.no_critical", "test.pass"]
+max_iterations = 10
+
+[[goals]]
+name = "quick-fix"
+description = "Fast bug fix"
+agents = ["coder", "reviewer"]
+max_iterations = 3
+
+# ─── Limits ───────────────────────────────────────────
+
+[limits]
+max_iterations_per_goal = 50
+max_iterations_per_phase = 5
+session_ttl_seconds = 3600
+phase_timeout_seconds = 300
+
+# ─── MCP Servers ──────────────────────────────────────
+
+[[mcp_servers]]
+name = "filesystem"
+command = "project-x-mcp-filesystem"

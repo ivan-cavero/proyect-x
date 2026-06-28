@@ -1,0 +1,71 @@
+[project]
+name = "project-x"
+version = "0.1.0"
+
+# ─── Providers ────────────────────────────────────────
+
+[providers.nan]
+base_url = "https://api.nan.builders/v1"
+api_key = "REDACTED_KEY_ROTATED"
+default_model = "qwen3.6"
+
+# ─── Roles ────────────────────────────────────────────
+
+[roles.architect]
+model = "qwen3.6"
+temperature = 0.6
+system_prompt = "You are a senior software architect specialized in Rust systems."
+tools = ["filesystem", "web_search"]
+
+[roles.coder]
+model = "qwen3.6"
+temperature = 0.6
+system_prompt = "You are an expert Rust engineer. Write production-quality code."
+tools = ["filesystem", "execute_command"]
+
+[roles.reviewer]
+model = "qwen3.6"
+temperature = 0.6
+system_prompt = "You are a senior code reviewer. Analyze code critically."
+tools = ["filesystem"]
+
+[roles.security]
+model = "qwen3.6"
+temperature = 0.6
+system_prompt = "You are a security auditor. Check for vulnerabilities."
+tools = ["filesystem", "grep"]
+
+[roles.tester]
+model = "qwen3.6"
+temperature = 0.6
+system_prompt = "You are a QA engineer. Generate comprehensive tests."
+tools = ["filesystem", "execute_command"]
+
+[roles.researcher]
+model = "qwen3.6"
+temperature = 0.6
+system_prompt = "You are a technical researcher. Find best practices."
+tools = ["web_search", "read_url"]
+
+# ─── Goals ────────────────────────────────────────────
+
+[[goals]]
+name = "full-feature"
+description = "Complete feature development"
+agents = ["architect", "coder", "reviewer", "security", "tester"]
+gates = ["review.pass", "security.no_critical", "test.pass"]
+max_iterations = 10
+
+[[goals]]
+name = "quick-fix"
+description = "Fast bug fix"
+agents = ["coder", "reviewer"]
+max_iterations = 3
+
+# ─── Limits ───────────────────────────────────────────
+
+[limits]
+max_iterations_per_goal = 50
+max_iterations_per_phase = 5
+session_ttl_seconds = 3600
+phase_timeout_seconds = 300
