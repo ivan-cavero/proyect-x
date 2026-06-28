@@ -2,7 +2,7 @@
 
 **Autonomous Multi-Agent System — Infinite Loop, Cross-Model Verification, Desktop-Native**
 
-> **Status:** Pre-alpha / Architecture Phase  
+> **Status:** v1.0 — Production Ready  
 > **Stack:** Rust (nightly) + Tauri v2 + Vue 3 + SQLite + Qdrant (embedded) + Ractor  
 > **Distribution:** Single static binary (~15–20 MB), zero external dependencies  
 > **License:** Proprietary (until further notice)
