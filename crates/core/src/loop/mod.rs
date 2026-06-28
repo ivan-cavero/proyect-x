@@ -4,6 +4,5 @@ pub mod controller;
 pub mod limits;
 pub mod divergence;
 
-pub use controller::LoopController;
-pub use limits::Limits;
-pub use divergence::DivergenceDetector;
+pub use controller::{LoopController, Limits, LimitViolation, LoopEvent, PhaseInfo};
+pub use divergence::{DivergenceDetector, DivergenceAlert, DivergenceKind, DivergenceSeverity};
