@@ -10,6 +10,7 @@ project-x-shared = { path = "../shared" }
 project-x-persistence = { path = "../persistence" }
 project-x-providers = { path = "../providers" }
 project-x-agent-traits = { path = "../agent-traits" }
+project-x-memory = { path = "../memory" }
 
 clap.workspace = true
 tokio.workspace = true
