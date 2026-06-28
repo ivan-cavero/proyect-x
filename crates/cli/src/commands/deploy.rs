@@ -1,7 +1,5 @@
 //! Deploy commands — VPS deployment via SSH.
 
-use std::path::Path;
-
 /// Deploy configuration for VPS.
 pub struct DeployConfig {
     pub host: String,

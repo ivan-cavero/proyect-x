@@ -98,7 +98,7 @@ impl Reviewer {
     }
 
     /// Review code and produce a verdict.
-    pub fn review_code(&self, task: &Task) -> serde_json::Value {
+    pub fn review_code(&self, _task: &Task) -> serde_json::Value {
         serde_json::json!({
             "passed": true,
             "comments": [{
@@ -584,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_tester_execute() {
-        let mut tester = Tester::new(test_role("tester"));
+        let tester = Tester::new(test_role("tester"));
         let task = Task::new("tester", "gpt-5", "write tests");
         let result = tester.execute(&task);
         assert_eq!(result.status, crate::orchestrator::task::TaskStatus::Completed);

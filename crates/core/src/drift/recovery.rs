@@ -178,7 +178,7 @@ impl RecoveryOrchestrator {
         &mut self,
         session_id: &str,
         consolidated_memory: &str,
-        goal: &str,
+        _goal: &str,
     ) -> RecoveryResult {
         self.consecutive_resets += 1;
 
@@ -206,7 +206,6 @@ impl RecoveryOrchestrator {
 
     /// Execute model upgrade/downgrade.
     pub fn execute_model_switch(&mut self, direction: &str) -> RecoveryResult {
-        let old_tier = self.current_tier.clone();
         let old_model = self.current_model.clone();
 
         match direction {
@@ -251,7 +250,7 @@ impl RecoveryOrchestrator {
     pub fn execute_session_handoff(
         &mut self,
         old_session_id: &str,
-        goal: &str,
+        _goal: &str,
     ) -> RecoveryResult {
         let action = RecoveryAction {
             kind: RecoveryKind::SessionHandoff,

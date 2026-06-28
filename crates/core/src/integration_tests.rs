@@ -6,8 +6,7 @@ mod integration_tests {
     use crate::drift::metrics::MetricSample;
     use crate::drift::recovery::DriftGuard;
     use crate::machine::phase::{Phase, StateMachine};
-    use crate::machine::gate::{Gate, GateEvaluator, GateRegistry, ReviewResult, ReviewComment, Severity};
-    use crate::orchestrator::verification::{ConsensusConsolidator, ConsensusStrategy};
+    use crate::machine::gate::{Gate, GateEvaluator, GateRegistry, ReviewResult};
     use crate::orchestrator::injection::{Injection, InjectionChannel, InjectionType, InjectionPriority, InjectionSource};
     use crate::orchestrator::task::Task;
 
@@ -31,7 +30,7 @@ mod integration_tests {
         let coder = Coder::new(test_role("coder", "gpt-5"));
         let reviewer = Reviewer::new(test_role("reviewer", "gemini-2.5-pro"));
         let security = Security::new(test_role("security", "claude-4-haiku"));
-        let mut tester = Tester::new(test_role("tester", "gpt-5"));
+        let tester = Tester::new(test_role("tester", "gpt-5"));
 
         let task = Task::new("architect", "claude-4-opus", "design a REST API");
         let adr = architect.execute(&task);
@@ -98,7 +97,7 @@ mod integration_tests {
         }
 
         // Record degraded metrics
-        let mut drift_detected = false;
+        let _drift_detected = false;
         for i in 0..10 {
             let report = guard.record_and_evaluate(MetricSample {
                 iteration: i + 12,
@@ -115,7 +114,6 @@ mod integration_tests {
 
             if let Some(report) = report {
                 if report.recovery_action.is_some() {
-                    drift_detected = true;
                     break;
                 }
             }
@@ -123,7 +121,6 @@ mod integration_tests {
 
         // If no recovery triggered, at least check health summary works
         let health = guard.health_summary();
-        assert!(health.recovery_count >= 0);
         assert!(health.agent_count > 0);
     }
 

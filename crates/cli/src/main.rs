@@ -254,7 +254,7 @@ async fn main() -> anyhow::Result<()> {
         }
 
         // ─── Run ───────────────────────────────────────────
-        Commands::Run { goal, file, resume, session, dry_run, headless, agents, agent: agent_overrides, parallel_reviewers } => {
+        Commands::Run { goal, file, resume, session: _, dry_run, headless, agents, agent: agent_overrides, parallel_reviewers } => {
             if let Some(g) = goal {
                 // Parse agent overrides
                 let mut overrides = std::collections::HashMap::new();
@@ -601,7 +601,7 @@ async fn main() -> anyhow::Result<()> {
             println!("{} metrics ok", "✓".green());
 
             print!("  {} HotMemory... ", "12.".cyan());
-            let mem = project_x_core::EventBus::new();
+            let _mem = project_x_core::EventBus::new();
             let hot = project_x_memory::HotMemory::new();
             hot.create_session("test-s1", "test-p1", "test goal");
             hot.push_interaction("test-s1", "coder", project_x_memory::Interaction {

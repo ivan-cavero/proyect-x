@@ -271,7 +271,7 @@ mod tests {
 
     #[test]
     fn test_valid_transition() {
-        let mut sm = StateMachine::new();
+        let sm = StateMachine::new();
         assert!(sm.can_transition(Phase::Planning));
         assert!(!sm.can_transition(Phase::Completed)); // Can't skip to Completed from Idle
     }
