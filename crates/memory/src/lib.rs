@@ -8,6 +8,12 @@ pub mod hot;
 pub mod episodic;
 pub mod consolidated;
 pub mod cache;
+pub mod context;
 
 pub use hot::{HotMemory, Interaction, SessionState, SessionStatus, SlidingWindow, HotMemoryStats};
 pub use cache::{LLMCache, CachedResponse, CacheStats};
+pub use context::{
+    TokenCounter, BudgetProfile, ContextBudget, ContextManager,
+    CompressionPipeline, CompressionResult, ContextHealth, HealthStatus,
+    ContextWindow, Message, Section,
+};
