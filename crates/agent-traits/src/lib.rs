@@ -14,18 +14,8 @@ pub mod prelude {
     pub use crate::tool::Tool;
 }
 
-use thiserror::Error;
+// Re-export the unified error type from shared
+pub use project_x_shared::error::ProjectXError;
 
-#[derive(Error, Debug)]
-pub enum AgentTraitsError {
-    #[error("Provider error: {0}")]
-    Provider(String),
-    #[error("Tool error: {0}")]
-    Tool(String),
-    #[error("Memory error: {0}")]
-    Memory(String),
-    #[error("Persistence error: {0}")]
-    Persistence(String),
-}
-
-pub type Result<T> = std::result::Result<T, AgentTraitsError>;
+/// Result type used throughout agent-traits.
+pub type Result<T> = std::result::Result<T, ProjectXError>;
