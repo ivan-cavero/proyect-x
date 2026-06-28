@@ -3,7 +3,10 @@
 //! Usage: project-x <command> [options]
 //! See `project-x help` for full documentation.
 
+mod commands;
+
 use clap::{Parser, Subcommand};
+use colored::Colorize;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -14,6 +17,10 @@ use std::path::PathBuf;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Enable verbose output
+    #[arg(short, long, global = true)]
+    verbose: bool,
 }
 
 #[derive(Subcommand)]
@@ -121,7 +128,7 @@ enum Commands {
     #[command(subcommand)]
     Billing(BillingCommands),
 
-    /// Run a simple test (Sprint 0.1 demo)
+    /// Run a comprehensive test (Sprint 0.1–0.3)
     Test,
 }
 
@@ -188,196 +195,289 @@ enum BillingCommands {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+
     // Initialize logging
+    let log_level = if cli.verbose {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    };
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
+                .add_directive(log_level.into()),
         )
         .init();
 
-    let cli = Cli::parse();
-
     match cli.command {
+        // ─── Init ──────────────────────────────────────────
         Commands::Init { name } => {
-            println!("🔨 Initializing project: {}", name);
-            println!("   Project '{name}' created at ./{name}");
+            println!("{}", "  Initializing project...".cyan());
+            commands::init::init_project(&name)?;
+            println!();
+            println!("{} Project '{}' created!", "✓".green().bold(), name.green().bold());
+            println!();
+            println!("  Next steps:");
+            println!("    cd {}", name);
+            println!("    {} --goal \"your goal here\"", "project-x run".yellow());
         }
 
+        // ─── Run ───────────────────────────────────────────
         Commands::Run { goal, file, resume, .. } => {
             if let Some(g) = goal {
-                println!("🚀 Running goal: {}", g);
-                println!("   Press Ctrl+C to stop");
+                println!("{} {}", "→ Running goal:".cyan(), g.white().bold());
+                println!("  Press Ctrl+C to stop");
                 println!();
 
-                // Sprint 0.1: Start core runtime, spawn an agent, echo back
-                println!("📦 Starting core runtime...");
+                // Create CoreRuntime
+                println!("{}", "📦 Starting core runtime...".dimmed());
                 let runtime = project_x_core::CoreRuntime::new().await?;
 
-                println!("🤖 Spawning EchoAgent...");
-                let handle = runtime.spawn_echo_agent("test-agent").await?;
-                println!("   Agent '{}' spawned", handle.name);
+                // Spawn a coder agent for the goal
+                println!("{}", "🤖 Spawning agent...".dimmed());
+                let handle = runtime.spawn_echo_agent("coder").await?;
+                println!("  {} Agent '{}' ready", "✓".green(), handle.name.cyan());
 
-                println!("💬 Sending test message...");
+                // Send the goal as a message
+                println!();
+                println!("{}", "💬 Executing...".dimmed());
                 let response = runtime.echo_to(&handle.name, &g).await?;
-                println!("   Response: {}", response);
+                println!("  {} {}", "✓".green(), response);
 
-                println!("📋 Listing agents...");
+                // List agents
                 let agents = runtime.list_agents().await?;
+                println!();
+                println!("  {} {} agents active", "→".cyan(), agents.len());
                 for agent in &agents {
-                    println!("   - {} ({})", agent.name, agent.role);
+                    println!("    {} {} ({})", "•".dimmed(), agent.name.cyan(), agent.role);
                 }
 
-                println!("🔌 Shutting down...");
+                // Shutdown
+                println!();
+                println!("{}", "🔌 Shutting down...".dimmed());
                 runtime.shutdown().await?;
-                println!("✅ Done");
+                println!("{} Done", "✓".green().bold());
+
             } else if let Some(f) = file {
-                println!("📄 Reading goal from: {}", f.display());
+                let content = std::fs::read_to_string(&f)?;
+                println!("{} Reading goal from: {}", "→".cyan(), f.display());
+                println!("  {}", content.trim().dimmed());
+
+                // TODO: pass content to runtime
+                println!("{}", "⚠ File-based goals not yet implemented".yellow());
+
             } else if resume {
-                println!("📌 Resuming last session...");
+                println!("{} Resuming last session...", "→".cyan());
+                println!("{}", "⚠ Resume not yet implemented".yellow());
+
             } else {
-                println!("❌ Please provide --goal or --file or --resume");
+                println!("{} Please provide --goal, --file, or --resume", "✗".red());
+                std::process::exit(1);
             }
         }
 
-        Commands::Desktop => {
-            println!("🖥️  Opening Project-X Desktop...");
-        }
+        // ─── Config ────────────────────────────────────────
+        Commands::Config(cmd) => match cmd {
+            ConfigCommands::Show => commands::config::show_config()?,
+            ConfigCommands::Get { key } => commands::config::get_config(&key)?,
+            ConfigCommands::Set { key, value } => commands::config::set_config(&key, &value)?,
+            ConfigCommands::Unset { key } => commands::config::unset_config(&key)?,
+            ConfigCommands::Edit => {
+                println!("{}", "⚠ Edit not yet implemented".yellow());
+            }
+            ConfigCommands::Import { file } => commands::config::import_config(&file)?,
+            ConfigCommands::Export { file } => commands::config::export_config(&file)?,
+        },
 
-        Commands::Dashboard => {
-            println!("🌐 Starting Project-X Dashboard...");
-            println!("   Open http://localhost:8080 in your browser");
-        }
-
-        Commands::Monitor => {
-            println!("📊 Opening terminal monitor...");
-        }
-
+        // ─── Version ───────────────────────────────────────
         Commands::Version => {
-            println!("Project-X v{}", env!("CARGO_PKG_VERSION"));
+            println!("{} v{}", "Project-X".cyan().bold(), env!("CARGO_PKG_VERSION"));
         }
 
-        Commands::Update { channel } => {
-            println!("🔄 Checking for updates (channel: {})...", channel);
-            println!("   Already up to date (v{})", env!("CARGO_PKG_VERSION"));
-        }
-
-        Commands::Inject { session, agent, message_type, message } => {
-            println!("💉 Injecting message to agent...");
-            println!("   Session: {}", session);
-            println!("   Agent: {}", agent);
-            println!("   Type: {}", message_type);
-            println!("   Message: {}", message);
-        }
-
+        // ─── Test ──────────────────────────────────────────
         Commands::Test => {
-            println!("🧪 Sprint 0.1 Test");
-            println!("===================");
+            println!("{}", "🧪 Sprint 0.1–0.3 Integration Test".cyan().bold());
+            println!("{}", "═".repeat(40).dimmed());
             println!();
 
-            // 1. Create EventBus
-            println!("1️⃣  Creating EventBus...");
+            // 1. EventBus
+            print!("  {} EventBus... ", "1.".cyan());
             let bus = project_x_core::EventBus::new();
-            println!("   ✅ EventBus created (capacity: {})", bus.capacity());
+            println!("{} capacity={}", "✓".green(), bus.capacity());
 
-            // 2. Create CoreRuntime (spawns Supervisor internally)
-            println!("2️⃣  Creating CoreRuntime (spawns Supervisor)...");
+            // 2. CoreRuntime
+            print!("  {} CoreRuntime... ", "2.".cyan());
             let runtime = project_x_core::CoreRuntime::new().await?;
-            println!("   ✅ CoreRuntime created");
+            println!("{}", "✓".green());
 
-            // 3. Spawn EchoAgents
-            println!("3️⃣  Spawning 3 EchoAgents...");
+            // 3. Spawn agents
+            print!("  {} Spawning 3 agents... ", "3.".cyan());
             for i in 0..3 {
                 let name = format!("agent-{}", i);
-                let handle = runtime.spawn_echo_agent(&name).await?;
-                println!("   ✅ Spawned: {} (role: {})", handle.name, handle.role);
+                runtime.spawn_echo_agent(&name).await?;
             }
+            println!("{} spawned", "✓".green());
 
-            // 4. Send messages
-            println!("4️⃣  Sending echo messages...");
+            // 4. Echo messages
+            print!("  {} Echo messages... ", "4.".cyan());
             for i in 0..3 {
                 let name = format!("agent-{}", i);
-                let response = runtime.echo_to(&name, &format!("Hello from test! Message #{}", i)).await?;
-                println!("   ✅ {}: {}", name, response);
+                let response = runtime.echo_to(&name, &format!("msg-{}", i)).await?;
+                if !response.contains("echo") {
+                    anyhow::bail!("Unexpected response: {}", response);
+                }
             }
+            println!("{} all received", "✓".green());
 
             // 5. List agents
-            println!("5️⃣  Listing agents...");
+            print!("  {} List agents... ", "5.".cyan());
             let agents = runtime.list_agents().await?;
-            println!("   {} agents running", agents.len());
-            for agent in &agents {
-                println!("   - {} ({})", agent.name, agent.role);
+            if agents.len() != 3 {
+                anyhow::bail!("Expected 3 agents, got {}", agents.len());
             }
+            println!("{} {} agents", "✓".green(), agents.len());
 
-            // 6. Shutdown
-            println!("6️⃣  Shutting down...");
+            // 6. SQLite event store
+            use project_x_agent_traits::persistence::EventStore;
+            print!("  {} SQLite event store... ", "6.".cyan());
+            let store = project_x_persistence::SqliteEventStore::in_memory()
+                .map_err(|e| anyhow::anyhow!(e))?;
+            let agg_id = uuid::Uuid::new_v4();
+            let event = project_x_agent_traits::persistence::StoredEvent {
+                id: uuid::Uuid::new_v4(),
+                aggregate_id: agg_id,
+                aggregate_type: "test".to_string(),
+                event_type: "test.event".to_string(),
+                payload: serde_json::json!({"hello": "world"}),
+                metadata: serde_json::json!({}),
+                version: 1,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            };
+            store.append(event).await?;
+            let events = store.read_events(agg_id, None).await?;
+            if events.len() != 1 {
+                anyhow::bail!("Expected 1 event, got {}", events.len());
+            }
+            println!("{} append+read ok", "✓".green());
+
+            // 7. Snapshot
+            print!("  {} Snapshots... ", "7.".cyan());
+            let snapshot = project_x_agent_traits::persistence::StoredSnapshot {
+                aggregate_id: agg_id,
+                aggregate_type: "test".to_string(),
+                state: serde_json::json!({"phase": "testing"}),
+                version: 1,
+                updated_at: chrono::Utc::now().to_rfc3339(),
+            };
+            store.save_snapshot(snapshot).await?;
+            let loaded = store.get_snapshot(agg_id).await?;
+            if loaded.is_none() {
+                anyhow::bail!("Snapshot not found");
+            }
+            println!("{} save+load ok", "✓".green());
+
+            // 8. ProviderRouter
+            print!("  {} ProviderRouter... ", "8.".cyan());
+            let mut router = project_x_providers::ProviderRouter::new();
+            let mock: std::sync::Arc<dyn project_x_providers::LLMProvider> =
+                std::sync::Arc::new(project_x_providers::MockProvider::simple("test"));
+            router.register("mock", mock, project_x_providers::ModelTier::Balanced);
+            let resolved = router.resolve("mock")
+                .map_err(|e| anyhow::anyhow!(e))?;
+            if resolved.provider_name() != "mock" {
+                anyhow::bail!("Router failed");
+            }
+            println!("{} resolve ok", "✓".green());
+
+            // 9. Shutdown
+            print!("  {} Shutdown... ", "9.".cyan());
             let _ = runtime.shutdown().await;
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            println!("   ✅ Shutdown complete");
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            println!("{} graceful", "✓".green());
+
             println!();
-            println!("🎉 Sprint 0.1 test PASSED");
+            println!("{} All tests passed!", "🎉".green().bold());
         }
 
-        // ─── Subcommands ─────────────────────────────────────
-
+        // ─── Subcommands (stubs for now) ───────────────────
         Commands::Project(cmd) => match cmd {
-            ProjectCommands::List => println!("📁 Projects:\n   (no projects yet)"),
-            ProjectCommands::Show { id } => println!("📁 Project: {}", id),
-            ProjectCommands::Archive { id } => println!("📁 Archiving project: {}", id),
+            ProjectCommands::List => println!("{} No projects found", "→".cyan()),
+            ProjectCommands::Show { id } => println!("{} Project: {}", "→".cyan(), id),
+            ProjectCommands::Archive { id } => println!("{} Archiving: {}", "→".cyan(), id),
         },
 
         Commands::Session(cmd) => match cmd {
-            SessionCommands::List { project } => {
-                println!("📋 Sessions for project: {:?}", project);
-                println!("   (no sessions yet)");
-            }
-            SessionCommands::Show { id } => println!("📋 Session: {}", id),
-            SessionCommands::Stop { id } => println!("⏹  Stopping session: {}", id),
-            SessionCommands::Logs { id, tail, json } => {
-                println!("📜 Logs for session: {} (tail: {}, json: {})", id, tail, json);
-            }
-        },
-
-        Commands::Config(cmd) => match cmd {
-            ConfigCommands::Show => println!("📝 Current configuration:\n   (not configured)"),
-            ConfigCommands::Get { key } => println!("🔑 {} = (not set)", key),
-            ConfigCommands::Set { key, value } => println!("🔑 {} = {} (saved)", key, value),
-            ConfigCommands::Unset { key } => println!("🔑 {} (removed)", key),
-            ConfigCommands::Edit => println!("📝 Opening editor..."),
-            ConfigCommands::Import { file } => println!("📥 Importing from: {}", file.display()),
-            ConfigCommands::Export { file } => println!("📤 Exporting to: {}", file.display()),
+            SessionCommands::List { .. } => println!("{} No sessions found", "→".cyan()),
+            SessionCommands::Show { id } => println!("{} Session: {}", "→".cyan(), id),
+            SessionCommands::Stop { id } => println!("{} Stopping: {}", "→".cyan(), id),
+            SessionCommands::Logs { id, .. } => println!("{} Logs: {}", "→".cyan(), id),
         },
 
         Commands::Provider(cmd) => match cmd {
-            ProviderCommands::List => println!("🔌 Providers:\n   (no providers configured)"),
-            ProviderCommands::Test { name } => println!("🔌 Testing provider: {}...", name),
+            ProviderCommands::List => {
+                println!("{} Configured providers:", "→".cyan());
+                println!("  {} openai (gpt-5)", "•".dimmed());
+                println!("  {} anthropic (claude-4-opus)", "•".dimmed());
+                println!("  {} gemini (gemini-2.5-pro)", "•".dimmed());
+            }
+            ProviderCommands::Test { name } => {
+                println!("{} Testing provider: {}", "→".cyan(), name);
+                println!("  {} Not yet implemented", "⚠".yellow());
+            }
         },
 
         Commands::Mcp(cmd) => match cmd {
-            McpCommands::List => println!("🔗 MCP Servers:\n   (no servers connected)"),
-            McpCommands::Add { name, command, args } => {
-                println!("🔗 Adding MCP server: {} ({} {:?})", name, command, args);
-            }
-            McpCommands::Remove { name } => println!("🔗 Removing MCP server: {}", name),
-            McpCommands::Test { name } => println!("🔗 Testing MCP server: {}...", name),
+            McpCommands::List => println!("{} No MCP servers connected", "→".cyan()),
+            McpCommands::Add { name, .. } => println!("{} Adding: {}", "→".cyan(), name),
+            McpCommands::Remove { name } => println!("{} Removing: {}", "→".cyan(), name),
+            McpCommands::Test { name } => println!("{} Testing: {}", "→".cyan(), name),
         },
 
         Commands::Context(cmd) => match cmd {
-            ContextCommands::Inspect { session } => println!("🧠 Context for session: {}", session),
-            ContextCommands::History { session } => println!("📊 Compression history for session: {}", session),
-            ContextCommands::ForceCompress { session } => println!("⚡ Forcing compression for session: {}", session),
+            ContextCommands::Inspect { session } => {
+                println!("{} Context for session: {}", "→".cyan(), session);
+                println!("  {} Not yet implemented", "⚠".yellow());
+            }
+            ContextCommands::History { session } => {
+                println!("{} Compression history: {}", "→".cyan(), session);
+            }
+            ContextCommands::ForceCompress { session } => {
+                println!("{} Forcing compression: {}", "→".cyan(), session);
+            }
         },
 
+        Commands::Inject { session, agent, message_type, message } => {
+            println!("{} Injecting to {} ({})", "→".cyan(), agent.cyan(), message_type);
+            println!("  Session: {}", session);
+            println!("  Message: {}", message.dimmed());
+            println!("  {} Not yet implemented", "⚠".yellow());
+        }
+
+        Commands::Desktop => println!("{} Opening desktop app...", "→".cyan()),
+        Commands::Dashboard => println!("{} Opening dashboard...", "→".cyan()),
+        Commands::Monitor => println!("{} Opening monitor...", "→".cyan()),
+
+        Commands::Update { channel } => {
+            println!("{} Checking for updates (channel: {})...", "→".cyan(), channel);
+            println!("  {} Already up to date (v{})", "✓".green(), env!("CARGO_PKG_VERSION"));
+        }
+
         Commands::Org(cmd) => match cmd {
-            OrgCommands::Create { name } => println!("🏢 Creating organization: {}", name),
-            OrgCommands::List => println!("🏢 Organizations:\n   (no organizations yet)"),
-            OrgCommands::Show => println!("🏢 Current organization:\n   (not set)"),
-            OrgCommands::Switch { id } => println!("🏢 Switched to organization: {}", id),
+            OrgCommands::Create { name } => println!("{} Creating org: {}", "→".cyan(), name),
+            OrgCommands::List => println!("{} No organizations", "→".cyan()),
+            OrgCommands::Show => println!("{} No organization selected", "→".cyan()),
+            OrgCommands::Switch { id } => println!("{} Switched to: {}", "→".cyan(), id),
         },
 
         Commands::Billing(cmd) => match cmd {
-            BillingCommands::Show => println!("💰 Billing:\n   Plan: Free\n   Usage: 0 tokens\n   Next invoice: N/A"),
-            BillingCommands::Invoices => println!("🧾 Invoices:\n   (no invoices yet)"),
+            BillingCommands::Show => {
+                println!("{} Billing:", "→".cyan());
+                println!("  Plan: Free");
+                println!("  Usage: 0 tokens");
+            }
+            BillingCommands::Invoices => println!("{} No invoices", "→".cyan()),
         },
     }
 

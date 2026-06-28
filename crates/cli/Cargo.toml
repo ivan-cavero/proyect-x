@@ -7,6 +7,9 @@ license = "Proprietary"
 [dependencies]
 project-x-core = { path = "../core" }
 project-x-shared = { path = "../shared" }
+project-x-persistence = { path = "../persistence" }
+project-x-providers = { path = "../providers" }
+project-x-agent-traits = { path = "../agent-traits" }
 
 clap.workspace = true
 tokio.workspace = true
@@ -20,6 +23,8 @@ indicatif.workspace = true
 self_update.workspace = true
 ratatui.workspace = true
 uuid.workspace = true
+toml.workspace = true
+chrono.workspace = true
 
 [[bin]]
 name = "project-x"
