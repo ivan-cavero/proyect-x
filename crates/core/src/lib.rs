@@ -18,7 +18,8 @@ pub use drift::*;
 pub use r#loop::*;
 pub use machine::*;
 pub use workflow::*;
-pub use orchestrator::{RoleConfig, RoleOverride, GoalConfig, AgentRole};
+pub use orchestrator::{RoleConfig, RoleOverride, GoalConfig, ResolvedRole};
+pub use orchestrator::roles::ResolvedRole as AgentRoleResolved;
 pub use orchestrator::{Task, TaskResult, TaskStatus};
 
 use thiserror::Error;

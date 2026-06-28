@@ -56,7 +56,7 @@ pub struct GoalConfig {
 
 /// Resolved agent role for a specific execution.
 #[derive(Debug, Clone)]
-pub struct AgentRole {
+pub struct ResolvedRole {
     pub role_name: String,
     pub model: String,
     pub temperature: f32,
@@ -66,7 +66,7 @@ pub struct AgentRole {
     pub context_profile: String,
 }
 
-impl AgentRole {
+impl ResolvedRole {
     /// Resolve a role from config and overrides.
     pub fn resolve(base: &RoleConfig, override_config: Option<&RoleOverride>) -> Self {
         let model = override_config
@@ -118,7 +118,7 @@ pub struct PhaseConfig {
 pub fn resolve_agents(
     goal: &GoalConfig,
     available_roles: &std::collections::HashMap<String, RoleConfig>,
-) -> Result<Vec<AgentRole>, String> {
+) -> Result<Vec<ResolvedRole>, String> {
     let mut roles = Vec::new();
 
     for role_name in &goal.agents {
@@ -128,7 +128,7 @@ pub fn resolve_agents(
         let override_config = goal.agent_overrides.as_ref()
             .and_then(|o| o.get(role_name));
 
-        roles.push(AgentRole::resolve(base, override_config));
+        roles.push(ResolvedRole::resolve(base, override_config));
     }
 
     Ok(roles)
@@ -150,7 +150,7 @@ mod tests {
             ..Default::default()
         };
 
-        let role = AgentRole::resolve(&config, None);
+        let role = ResolvedRole::resolve(&config, None);
         assert_eq!(role.model, "gpt-5");
         assert_eq!(role.temperature, 0.3);
         assert!(role.system_prompt.contains("Rust expert"));
@@ -172,7 +172,7 @@ mod tests {
             context_profile: None,
         };
 
-        let role = AgentRole::resolve(&config, Some(&override_config));
+        let role = ResolvedRole::resolve(&config, Some(&override_config));
         assert_eq!(role.model, "claude-4-opus"); // Overridden
         assert_eq!(role.temperature, 0.1); // Overridden
     }

@@ -10,5 +10,5 @@
 pub mod roles;
 pub mod task;
 
-pub use roles::{RoleConfig, RoleOverride, GoalConfig, AgentRole};
+pub use roles::{RoleConfig, RoleOverride, GoalConfig, ResolvedRole};
 pub use task::{Task, TaskResult, TaskStatus};
