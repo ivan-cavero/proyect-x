@@ -16,14 +16,16 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            binary: project-x
           - target: x86_64-apple-darwin
             os: macos-latest
+            binary: project-x
           - target: aarch64-apple-darwin
             os: macos-latest
+            binary: project-x
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            binary: project-x.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -33,14 +35,23 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename binary
+        run: cp target/${{ matrix.target }}/release/${{ matrix.binary }} project-x-${{ matrix.target }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: project-x-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/project-x*
+          path: project-x-${{ matrix.target }}
 
   release:
     needs: build
@@ -48,12 +59,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download artifacts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          for dir in project-x-*/; do
+            if [ -f "$dir/project-x"* ]; then
+              sha256sum "$dir/project-x"* > "${dir}sha256sum.txt"
+            fi
+          done
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            project-x-*/project-x*
+            artifacts/**/project-x*
+            artifacts/**/sha256sum.txt

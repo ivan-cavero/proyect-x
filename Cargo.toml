@@ -30,7 +30,7 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.34"
 qdrant-client = "1.12"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 tiktoken-rs = "0.12"
 self_update = "0.44"
 colored = "3"
