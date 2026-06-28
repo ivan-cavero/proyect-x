@@ -56,7 +56,7 @@ pub type Result<T> = std::result::Result<T, CoreError>;
 /// The central runtime that manages the entire system.
 pub struct CoreRuntime {
     pub bus: EventBus,
-    pub supervisor: ractor::ActorRef<actor::Supervisor>,
+    pub supervisor: ractor::ActorRef<actor::SupervisorMessage>,
 }
 
 impl CoreRuntime {

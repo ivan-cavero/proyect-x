@@ -23,25 +23,25 @@ thiserror = "2"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
-ractor = "0.7"
+ractor = "0.15"
 dashmap = "6"
 moka = { version = "0.12", features = ["sync"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 r2d2 = "0.8"
-r2d2_sqlite = "0.25"
+r2d2_sqlite = "0.34"
 qdrant-client = "1.12"
 reqwest = { version = "0.12", features = ["json", "stream"] }
-tiktoken-rs = "0.6"
-self_update = "0.41"
+tiktoken-rs = "0.12"
+self_update = "0.44"
 colored = "3"
-indicatif = "0.17"
-ratatui = "0.29"
+indicatif = "0.18"
+ratatui = "0.30"
 criterion = { version = "0.5", features = ["async_futures"] }
-rand = "0.8"
+rand = "0.9"
 refinery = { version = "0.9", features = ["rusqlite"] }
 mockall = "0.13"
 async-trait = "0.1"
-toml = "0.8"
+toml = "1.1"
 
 [profile.release]
 opt-level = 3
