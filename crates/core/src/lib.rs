@@ -9,6 +9,7 @@ pub mod drift;
 pub mod r#loop;
 pub mod machine;
 pub mod workflow;
+pub mod orchestrator;
 
 // Re-exports for convenience
 pub use actor::*;
@@ -17,6 +18,8 @@ pub use drift::*;
 pub use r#loop::*;
 pub use machine::*;
 pub use workflow::*;
+pub use orchestrator::{RoleConfig, RoleOverride, GoalConfig, AgentRole};
+pub use orchestrator::{Task, TaskResult, TaskStatus};
 
 use thiserror::Error;
 
