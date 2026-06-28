@@ -1,7 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, watch, onMounted } from 'vue'
+import Card from './components/ui/Card.vue'
+import Button from './components/ui/Button.vue'
+import Badge from './components/ui/Badge.vue'
 
-// ─── Configuration ─────────────────────────────────────
+// ─── State ─────────────────────────────────────────────
+
+const currentView = ref('chat')
 
 interface Provider {
   name: string
@@ -16,51 +21,32 @@ interface Message {
   content: string
   timestamp: Date
   model?: string
-  tokens?: { input: number; output: number }
 }
 
-// ─── State ─────────────────────────────────────────────
-
-const currentView = ref('chat')
-const sidebarCollapsed = ref(false)
-
-// Providers
 const providers = ref<Provider[]>([])
-const activeProvider = ref<string>('')
-const activeModel = ref<string>('')
-
-// Chat
+const activeProvider = ref('')
+const activeModel = ref('')
 const messages = ref<Message[]>([])
 const inputMessage = ref('')
 const isLoading = ref(false)
-
-// Metrics
-const totalTokens = ref(0)
-const totalCost = ref(0)
-const sessionCount = ref(1)
-
-// Config panel
-const showConfig = ref(false)
+const showAddProvider = ref(false)
 const newProvider = ref({ name: '', baseUrl: '', apiKey: '' })
 
-// ─── Init ──────────────────────────────────────────────
+// ─── Persistence ───────────────────────────────────────
 
 onMounted(() => {
-  // Load saved config from localStorage
   const saved = localStorage.getItem('project-x-config')
   if (saved) {
     try {
       const config = JSON.parse(saved)
       providers.value = config.providers || []
-      if (providers.value.length > 0) {
+      if (providers.value.length > 0 && !activeProvider.value) {
         activeProvider.value = providers.value[0].name
         activeModel.value = providers.value[0].models[0] || ''
       }
     } catch {}
   }
 })
-
-// ─── Save Config ───────────────────────────────────────
 
 function saveConfig() {
   localStorage.setItem('project-x-config', JSON.stringify({
@@ -70,21 +56,22 @@ function saveConfig() {
   }))
 }
 
-// ─── Provider Management ───────────────────────────────
+// ─── Providers ─────────────────────────────────────────
 
 function addProvider() {
-  if (newProvider.value.name && newProvider.value.baseUrl) {
-    providers.value.push({
-      name: newProvider.value.name,
-      baseUrl: newProvider.value.baseUrl,
-      apiKey: newProvider.value.apiKey,
-      models: [],
-    })
-    if (!activeProvider.value) activeProvider.value = newProvider.value.name
-    saveConfig()
-    newProvider.value = { name: '', baseUrl: '', apiKey: '' }
-    showConfig.value = false
+  if (!newProvider.value.name || !newProvider.value.baseUrl) return
+  providers.value.push({
+    name: newProvider.value.name,
+    baseUrl: newProvider.value.baseUrl,
+    apiKey: newProvider.value.apiKey,
+    models: [],
+  })
+  if (!activeProvider.value) {
+    activeProvider.value = newProvider.value.name
   }
+  saveConfig()
+  newProvider.value = { name: '', baseUrl: '', apiKey: '' }
+  showAddProvider.value = false
 }
 
 function removeProvider(name: string) {
@@ -99,27 +86,23 @@ function removeProvider(name: string) {
 // ─── Chat ──────────────────────────────────────────────
 
 async function sendMessage() {
-  if (!inputMessage.value.trim() || isLoading.value) return
-  if (!activeProvider.value) {
-    alert('Please add a provider first (Config → Add Provider)')
-    return
-  }
+  if (!inputMessage.value.trim() || isLoading.value || !activeProvider.value) return
 
   const provider = providers.value.find(p => p.name === activeProvider.value)
   if (!provider) return
 
-  const userMsg: Message = {
+  messages.value.push({
     id: Date.now().toString(),
     role: 'user',
     content: inputMessage.value,
     timestamp: new Date(),
-  }
-  messages.value.push(userMsg)
+  })
+
   inputMessage.value = ''
   isLoading.value = true
 
   try {
-    const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -127,43 +110,27 @@ async function sendMessage() {
       },
       body: JSON.stringify({
         model: activeModel.value || provider.models[0],
-        messages: messages.value.map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-        stream: false,
+        messages: messages.value.map(m => ({ role: m.role, content: m.content })),
       }),
     })
 
-    if (!response.ok) throw new Error(`API error: ${response.status}`)
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`)
+    const data = await res.json()
 
-    const data = await response.json()
-    const assistantMsg: Message = {
+    messages.value.push({
       id: Date.now().toString(),
       role: 'assistant',
       content: data.choices?.[0]?.message?.content || 'No response',
       timestamp: new Date(),
       model: data.model,
-      tokens: data.usage ? {
-        input: data.usage.prompt_tokens,
-        output: data.usage.completion_tokens,
-      } : undefined,
-    }
-
-    messages.value.push(assistantMsg)
-
-    // Update metrics
-    if (data.usage) {
-      totalTokens.value += data.usage.total_tokens || 0
-    }
-  } catch (error: any) {
-    const errorMsg: Message = {
+    })
+  } catch (e: any) {
+    messages.value.push({
       id: Date.now().toString(),
       role: 'system',
-      content: `Error: ${error.message}`,
+      content: `Error: ${e.message}`,
       timestamp: new Date(),
-    }
-    messages.value.push(errorMsg)
+    })
   } finally {
     isLoading.value = false
   }
@@ -179,357 +146,237 @@ const navItems = [
   { id: 'chat', label: 'Chat', icon: '💬' },
   { id: 'agents', label: 'Agents', icon: '🤖' },
   { id: 'sessions', label: 'Sessions', icon: '📋' },
-  { id: 'context', label: 'Context', icon: '🧠' },
   { id: 'config', label: 'Config', icon: '⚙️' },
-  { id: 'logs', label: 'Logs', icon: '📊' },
 ]
 
 // ─── Auto-scroll ───────────────────────────────────────
 
 const chatContainer = ref<HTMLElement>()
 watch(messages, () => {
-  setTimeout(() => {
-    chatContainer.value?.scrollTo(0, chatContainer.value.scrollHeight)
-  }, 100)
+  setTimeout(() => chatContainer.value?.scrollTo({ top: chatContainer.value.scrollHeight, behavior: 'smooth' }), 50)
 }, { deep: true })
 </script>
 
 <template>
-  <div class="h-screen flex bg-[#0a0a0a] text-[#e5e5e5] font-sans antialiased">
+  <div class="h-screen flex bg-[#0a0a0a] text-[#e5e5e5] antialiased">
 
-    <!-- Sidebar -->
-    <aside
-      class="bg-[#111111] border-r border-[#1f1f1f] flex flex-col transition-all duration-300"
-      :class="sidebarCollapsed ? 'w-16' : 'w-64'"
-    >
-      <!-- Logo -->
-      <div class="h-14 border-b border-[#1f1f1f] flex items-center px-4">
+    <!-- ═══ SIDEBAR ═══ -->
+    <aside class="bg-[#111111] border-r border-[#1f1f1f] flex flex-col w-64 shrink-0">
+      <div class="h-14 border-b border-[#1f1f1f] flex items-center px-5 gap-3">
         <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center text-white font-bold text-sm">X</div>
-        <div v-if="!sidebarCollapsed" class="ml-3">
+        <div>
           <div class="text-sm font-semibold text-white">Project-X</div>
           <div class="text-[10px] text-gray-500">v1.0.0</div>
         </div>
       </div>
 
-      <!-- Nav -->
-      <nav class="flex-1 py-4 px-2">
+      <nav class="flex-1 py-4 px-3 space-y-1">
         <button
           v-for="item in navItems"
           :key="item.id"
           @click="currentView = item.id"
-          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all mb-1"
+          class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all"
           :class="currentView === item.id
             ? 'bg-green-500/10 text-green-400'
             : 'text-gray-400 hover:bg-white/5 hover:text-white'"
         >
           <span class="text-lg w-6 text-center">{{ item.icon }}</span>
-          <span v-if="!sidebarCollapsed">{{ item.label }}</span>
+          <span>{{ item.label }}</span>
         </button>
       </nav>
 
-      <!-- Footer -->
-      <div class="p-4 border-t border-[#1f1f1f]">
-        <div class="flex items-center gap-2 text-xs text-gray-500">
-          <div class="w-2 h-2 rounded-full bg-green-500"></div>
-          <span v-if="!sidebarCollapsed">Online</span>
-        </div>
+      <div class="p-4 border-t border-[#1f1f1f] space-y-3">
+        <div class="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Active Model</div>
+        <div v-if="activeModel" class="text-sm text-green-400 font-mono">{{ activeModel }}</div>
+        <div v-else class="text-sm text-gray-600">No model selected</div>
+        <div class="text-[10px] text-gray-600 mt-1">{{ activeProvider || 'No provider' }}</div>
       </div>
     </aside>
 
-    <!-- Main Content -->
+    <!-- ═══ MAIN CONTENT ═══ -->
     <div class="flex-1 flex flex-col min-w-0">
 
       <!-- Top Bar -->
-      <header class="h-14 border-b border-[#1f1f1f] bg-[#111111]/50 backdrop-blur-sm flex items-center px-6 justify-between">
-        <div class="flex items-center gap-4">
-          <button @click="sidebarCollapsed = !sidebarCollapsed" class="text-gray-400 hover:text-white">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
-            </svg>
-          </button>
-          <span class="text-sm font-medium">{{ navItems.find(n => n.id === currentView)?.label }}</span>
-        </div>
-        <div class="flex items-center gap-6 text-xs text-gray-500">
-          <span>Tokens: <span class="text-white">{{ totalTokens.toLocaleString() }}</span></span>
-          <span>Cost: <span class="text-green-400">${{ totalCost.toFixed(4) }}</span></span>
-          <span>Sessions: <span class="text-white">{{ sessionCount }}</span></span>
+      <header class="h-14 border-b border-[#1f1f1f] bg-[#111111]/50 backdrop-blur-sm flex items-center px-6 justify-between shrink-0">
+        <span class="text-sm font-semibold">{{ navItems.find(n => n.id === currentView)?.label }}</span>
+        <div class="flex items-center gap-4 text-xs text-gray-500">
+          <span>Messages: {{ messages.length }}</span>
+          <span class="w-2 h-2 rounded-full bg-green-500"></span>
         </div>
       </header>
 
-      <!-- Views -->
-      <main class="flex-1 overflow-hidden">
-
-        <!-- ═══ CHAT VIEW ═══ -->
-        <div v-if="currentView === 'chat'" class="h-full flex flex-col">
-          <!-- Messages -->
-          <div ref="chatContainer" class="flex-1 overflow-y-auto p-6 space-y-4">
-            <div v-if="messages.length === 0" class="h-full flex items-center justify-center">
-              <div class="text-center">
-                <div class="text-4xl mb-4">💬</div>
-                <div class="text-lg text-gray-400 mb-2">Start a conversation</div>
-                <div class="text-sm text-gray-600">
-                  {{ activeProvider ? `Using ${activeModel} via ${activeProvider}` : 'Add a provider in Config to get started' }}
-                </div>
-              </div>
-            </div>
-
-            <div v-for="msg in messages" :key="msg.id" class="max-w-3xl mx-auto">
-              <div class="flex gap-3" :class="msg.role === 'assistant' ? 'flex-row' : 'flex-row-reverse'">
-                <!-- Avatar -->
-                <div class="w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm"
-                  :class="msg.role === 'user' ? 'bg-green-500/20 text-green-400' : msg.role === 'system' ? 'bg-red-500/20 text-red-400' : 'bg-blue-500/20 text-blue-400'">
-                  {{ msg.role === 'user' ? '👤' : msg.role === 'system' ? '⚠' : '🤖' }}
-                </div>
-                <!-- Content -->
-                <div class="flex-1 min-w-0">
-                  <div class="text-[10px] text-gray-500 mb-1 flex items-center gap-2">
-                    <span>{{ msg.role }}</span>
-                    <span v-if="msg.model" class="text-gray-600">• {{ msg.model }}</span>
-                    <span class="text-gray-600">• {{ msg.timestamp.toLocaleTimeString() }}</span>
-                  </div>
-                  <div class="bg-[#1a1a1a] rounded-xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap"
-                    :class="msg.role === 'system' ? 'border border-red-500/20 text-red-300' : ''">
-                    {{ msg.content }}
-                  </div>
-                  <div v-if="msg.tokens" class="text-[10px] text-gray-600 mt-1">
-                    {{ msg.tokens.input }} in / {{ msg.tokens.output }} out
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- Loading indicator -->
-            <div v-if="isLoading" class="max-w-3xl mx-auto flex gap-3">
-              <div class="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-sm">🤖</div>
-              <div class="bg-[#1a1a1a] rounded-xl px-4 py-3">
-                <div class="flex gap-1">
-                  <div class="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style="animation-delay: 0s"></div>
-                  <div class="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style="animation-delay: 0.1s"></div>
-                  <div class="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
-                </div>
+      <!-- ═══ CHAT VIEW ═══ -->
+      <div v-if="currentView === 'chat'" class="flex-1 flex flex-col min-h-0">
+        <!-- Messages -->
+        <div ref="chatContainer" class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          <div v-if="messages.length === 0" class="h-full flex items-center justify-center">
+            <div class="text-center">
+              <div class="text-5xl mb-4 opacity-30">💬</div>
+              <div class="text-lg text-gray-400 mb-1">Start a conversation</div>
+              <div class="text-sm text-gray-600">
+                {{ activeProvider ? `Using ${activeModel} via ${activeProvider}` : 'Add a provider in Config first' }}
               </div>
             </div>
           </div>
 
-          <!-- Input -->
-          <div class="border-t border-[#1f1f1f] p-4">
-            <div class="max-w-3xl mx-auto flex gap-3">
-              <input
-                v-model="inputMessage"
-                @keyup.enter="sendMessage"
-                :placeholder="activeProvider ? `Message ${activeModel}...` : 'Add a provider first (Config)'"
-                class="flex-1 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-4 py-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500/50 transition-colors"
-                :disabled="isLoading || !activeProvider"
-              />
-              <button
-                @click="sendMessage"
-                :disabled="isLoading || !inputMessage.trim() || !activeProvider"
-                class="px-5 py-3 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500 rounded-xl text-sm font-medium transition-colors"
-              >
-                Send
-              </button>
-              <button @click="clearChat" class="px-3 py-3 bg-[#1a1a1a] hover:bg-[#252525] rounded-xl text-gray-400 text-sm transition-colors">
-                Clear
-              </button>
+          <div v-for="msg in messages" :key="msg.id" class="flex gap-3" :class="msg.role === 'user' ? 'justify-end' : ''">
+            <div v-if="msg.role !== 'user'" class="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-sm shrink-0">🤖</div>
+            <div class="max-w-2xl min-w-0">
+              <div class="text-[10px] text-gray-500 mb-1">{{ msg.role }} · {{ msg.timestamp.toLocaleTimeString() }}</div>
+              <div class="rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap"
+                :class="msg.role === 'user'
+                  ? 'bg-green-600/20 text-green-100 border border-green-600/30'
+                  : msg.role === 'system'
+                    ? 'bg-red-500/10 text-red-300 border border-red-500/20'
+                    : 'bg-[#1a1a1a] text-gray-200 border border-[#2a2a2a]'"
+              >{{ msg.content }}</div>
             </div>
+            <div v-if="msg.role === 'user'" class="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center text-sm shrink-0">👤</div>
           </div>
-        </div>
 
-        <!-- ═══ CONFIG VIEW ═══ -->
-        <div v-else-if="currentView === 'config'" class="p-8 overflow-y-auto h-full">
-          <div class="max-w-2xl mx-auto space-y-8">
-
-            <!-- Active Provider -->
-            <section>
-              <h2 class="text-lg font-semibold mb-4">Active Provider</h2>
-              <div class="bg-[#111111] border border-[#1f1f1f] rounded-2xl p-6">
-                <div class="grid grid-cols-2 gap-4 mb-4">
-                  <div>
-                    <label class="text-xs text-gray-500 block mb-1">Provider</label>
-                    <select v-model="activeProvider" @change="saveConfig"
-                      class="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-3 py-2.5 text-sm text-white focus:border-green-500/50">
-                      <option value="">Select provider</option>
-                      <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label class="text-xs text-gray-500 block mb-1">Model</label>
-                    <select v-model="activeModel" @change="saveConfig"
-                      class="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-3 py-2.5 text-sm text-white focus:border-green-500/50">
-                      <option value="">Select model</option>
-                      <option v-for="m in providers.find(p => p.name === activeProvider)?.models || []" :key="m" :value="m">{{ m }}</option>
-                    </select>
-                  </div>
-                </div>
-                <div v-if="activeModel" class="text-xs text-gray-500">
-                  Active: <span class="text-green-400">{{ activeModel }}</span> via <span class="text-white">{{ activeProvider }}</span>
-                </div>
-              </div>
-            </section>
-
-            <!-- Providers -->
-            <section>
-              <div class="flex items-center justify-between mb-4">
-                <h2 class="text-lg font-semibold">Providers</h2>
-                <button @click="showConfig = !showConfig"
-                  class="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium transition-colors">
-                  {{ showConfig ? 'Cancel' : '+ Add Provider' }}
-                </button>
-              </div>
-
-              <!-- Provider cards -->
-              <div class="space-y-3">
-                <div v-for="p in providers" :key="p.name"
-                  class="bg-[#111111] border border-[#1f1f1f] rounded-2xl p-5">
-                  <div class="flex items-center justify-between mb-2">
-                    <div class="flex items-center gap-2">
-                      <div class="w-2 h-2 rounded-full bg-green-500"></div>
-                      <span class="font-medium">{{ p.name }}</span>
-                    </div>
-                    <button @click="removeProvider(p.name)" class="text-xs text-gray-500 hover:text-red-400">Remove</button>
-                  </div>
-                  <div class="text-xs text-gray-500 font-mono mb-2">{{ p.baseUrl }}</div>
-                  <div class="flex gap-2 flex-wrap">
-                    <span v-for="m in p.models" :key="m"
-                      class="text-xs px-2.5 py-1 rounded-full bg-white/5 text-gray-400">{{ m }}</span>
-                  </div>
-                </div>
-
-                <!-- Empty state -->
-                <div v-if="providers.length === 0 && !showConfig" class="text-center py-12 text-gray-500">
-                  <div class="text-4xl mb-3">🔌</div>
-                  <div class="text-sm">No providers configured</div>
-                  <div class="text-xs mt-1 text-gray-600">Click "Add Provider" to connect to an AI API</div>
-                </div>
-              </div>
-
-              <!-- Add Provider Form -->
-              <div v-if="showConfig" class="mt-4 bg-[#111111] border border-green-500/30 rounded-2xl p-6 space-y-4">
-                <h3 class="font-medium">Add Provider</h3>
-                <div class="text-xs text-gray-500 mb-2">Any OpenAI-compatible API works</div>
-                <input v-model="newProvider.name" placeholder="Name (e.g., nan, deepseek, openai)"
-                  class="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-green-500/50" />
-                <input v-model="newProvider.baseUrl" placeholder="Base URL (https://api.example.com/v1)"
-                  class="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-green-500/50" />
-                <input v-model="newProvider.apiKey" placeholder="API Key" type="password"
-                  class="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-green-500/50" />
-                <button @click="addProvider"
-                  class="w-full py-3 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium transition-colors">
-                  Save Provider
-                </button>
-              </div>
-            </section>
-          </div>
-        </div>
-
-        <!-- ═══ AGENTS VIEW ═══ -->
-        <div v-else-if="currentView === 'agents'" class="p-6 overflow-y-auto h-full">
-          <div class="max-w-3xl mx-auto space-y-6">
-            <h2 class="text-lg font-semibold">Agent Roles</h2>
-            <div class="bg-[#111111] border border-[#1f1f1f] rounded-2xl p-6 space-y-4">
-              <div class="grid grid-cols-3 gap-3 text-xs">
-                <div class="bg-[#1a1a1a] rounded-lg p-3">
-                  <div class="font-medium text-white mb-1">Architect</div>
-                  <div class="text-gray-500">System design, ADRs</div>
-                  <div class="text-green-400 mt-1">{{ activeModel }}</div>
-                </div>
-                <div class="bg-[#1a1a1a] rounded-lg p-3">
-                  <div class="font-medium text-white mb-1">Coder</div>
-                  <div class="text-gray-500">Code generation</div>
-                  <div class="text-green-400 mt-1">{{ activeModel }}</div>
-                </div>
-                <div class="bg-[#1a1a1a] rounded-lg p-3">
-                  <div class="font-medium text-white mb-1">Reviewer</div>
-                  <div class="text-gray-500">Code review</div>
-                  <div class="text-green-400 mt-1">{{ activeModel }}</div>
-                </div>
-                <div class="bg-[#1a1a1a] rounded-lg p-3">
-                  <div class="font-medium text-white mb-1">Security</div>
-                  <div class="text-gray-500">Vulnerability scan</div>
-                  <div class="text-green-400 mt-1">{{ activeModel }}</div>
-                </div>
-                <div class="bg-[#1a1a1a] rounded-lg p-3">
-                  <div class="font-medium text-white mb-1">Tester</div>
-                  <div class="text-gray-500">Test generation</div>
-                  <div class="text-green-400 mt-1">{{ activeModel }}</div>
-                </div>
-                <div class="bg-[#1a1a1a] rounded-lg p-3">
-                  <div class="font-medium text-white mb-1">Researcher</div>
-                  <div class="text-gray-500">Web research</div>
-                  <div class="text-green-400 mt-1">{{ activeModel }}</div>
-                </div>
+          <div v-if="isLoading" class="flex gap-3">
+            <div class="w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-sm">🤖</div>
+            <div class="bg-[#1a1a1a] rounded-2xl px-4 py-3 border border-[#2a2a2a]">
+              <div class="flex gap-1.5">
+                <div class="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style="animation-delay: 0s"></div>
+                <div class="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style="animation-delay: 0.15s"></div>
+                <div class="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style="animation-delay: 0.3s"></div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- ═══ SESSIONS VIEW ═══ -->
-        <div v-else-if="currentView === 'sessions'" class="p-6 overflow-y-auto h-full">
-          <div class="max-w-3xl mx-auto space-y-6">
-            <h2 class="text-lg font-semibold">Sessions</h2>
-            <div v-if="messages.length === 0" class="bg-[#111111] border border-[#1f1f1f] rounded-2xl p-12 text-center text-gray-500">
-              <div class="text-3xl mb-3">📋</div>
-              <div class="text-sm">No sessions yet</div>
-              <div class="text-xs text-gray-600 mt-1">Start a chat to create a session</div>
-            </div>
-            <div v-else class="bg-[#111111] border border-[#1f1f1f] rounded-2xl p-5">
-              <div class="text-sm text-gray-400">{{ messages.length }} messages in current session</div>
-              <div class="text-xs text-gray-600 mt-2">Session data persists in browser localStorage</div>
-            </div>
+        <!-- Input Bar -->
+        <div class="border-t border-[#1f1f1f] px-6 py-4 shrink-0">
+          <div class="flex gap-3 max-w-3xl">
+            <input
+              v-model="inputMessage"
+              @keydown.enter="sendMessage"
+              :placeholder="activeProvider ? `Message ${activeModel}...` : 'Configure a provider first'"
+              :disabled="isLoading || !activeProvider"
+              class="flex-1 bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-4 py-3 text-sm text-white
+                     placeholder-gray-500 focus:outline-none focus:border-green-500/50
+                     disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            />
+            <button @click="sendMessage" :disabled="isLoading || !inputMessage.trim() || !activeProvider"
+              class="px-5 bg-green-600 hover:bg-green-500 disabled:bg-gray-700 disabled:text-gray-500
+                     rounded-xl text-sm font-medium text-white transition-colors">
+              Send
+            </button>
+            <button @click="clearChat" class="px-4 bg-[#1a1a1a] hover:bg-[#252525] rounded-xl text-gray-400 text-sm transition-colors border border-[#2a2a2a]">
+              Clear
+            </button>
           </div>
         </div>
+      </div>
 
-        <!-- ═══ CONTEXT VIEW ═══ -->
-        <div v-else-if="currentView === 'context'" class="p-6 overflow-y-auto h-full">
-          <div class="max-w-3xl mx-auto space-y-6">
-            <h2 class="text-lg font-semibold">Context Management</h2>
-            <div class="bg-[#111111] border border-[#1f1f1f] rounded-2xl p-6 space-y-4">
-              <div class="text-sm text-white mb-2">Context Budget</div>
-              <div class="flex justify-between text-xs text-gray-500">
-                <span>Used</span>
-                <span class="text-white font-mono">0 / 128,000 tokens</span>
+      <!-- ═══ AGENTS VIEW ═══ -->
+      <div v-else-if="currentView === 'agents'" class="flex-1 overflow-y-auto px-6 py-6">
+        <div class="max-w-3xl space-y-4">
+          <h2 class="text-lg font-semibold">Agent Roles</h2>
+          <div class="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            <Card v-for="role in ['Architect', 'Coder', 'Reviewer', 'Security', 'Tester', 'Researcher']" :key="role">
+              <div class="space-y-2">
+                <div class="font-medium text-white">{{ role }}</div>
+                <div class="text-xs text-gray-500">{{ { Architect: 'System design, ADRs', Coder: 'Code generation', Reviewer: 'Code review', Security: 'Vulnerability scan', Tester: 'Test generation', Researcher: 'Web research' }[role] }}</div>
+                <Badge variant="green" size="sm">{{ activeModel || 'No model' }}</Badge>
               </div>
-              <div class="w-full bg-[#1a1a1a] rounded-full h-2">
-                <div class="bg-green-500 h-2 rounded-full" style="width: 0%"></div>
-              </div>
-              <div class="grid grid-cols-3 gap-3 text-xs mt-4">
-                <div class="bg-[#1a1a1a] rounded-lg p-3">
-                  <div class="text-gray-500">Compressions</div>
-                  <div class="text-white font-mono">0</div>
-                </div>
-                <div class="bg-[#1a1a1a] rounded-lg p-3">
-                  <div class="text-gray-500">ASI Score</div>
-                  <div class="text-white font-mono">100.0</div>
-                </div>
-                <div class="bg-[#1a1a1a] rounded-lg p-3">
-                  <div class="text-gray-500">Health</div>
-                  <div class="text-green-400 font-mono">Healthy</div>
-                </div>
-              </div>
-            </div>
+            </Card>
           </div>
         </div>
+      </div>
 
-        <!-- ═══ LOGS VIEW ═══ -->
-        <div v-else-if="currentView === 'logs'" class="p-6 overflow-y-auto h-full">
-          <div class="max-w-3xl mx-auto space-y-6">
-            <h2 class="text-lg font-semibold">Event Log</h2>
-            <div class="bg-[#111111] border border-[#1f1f1f] rounded-2xl p-5 font-mono text-xs">
-              <div v-if="messages.length === 0" class="text-center py-8 text-gray-600">
-                No events yet. Send a message to see events here.
+      <!-- ═══ SESSIONS VIEW ═══ -->
+      <div v-else-if="currentView === 'sessions'" class="flex-1 overflow-y-auto px-6 py-6">
+        <div class="max-w-3xl space-y-4">
+          <h2 class="text-lg font-semibold">Sessions</h2>
+          <Card v-if="messages.length > 0">
+            <div class="flex items-center justify-between">
+              <div>
+                <div class="font-medium text-white">Current Chat</div>
+                <div class="text-xs text-gray-500 mt-1">{{ messages.length }} messages</div>
               </div>
-              <div v-for="(msg, i) in messages" :key="i" class="flex gap-3 py-1.5 border-b border-[#1f1f1f] last:border-0">
-                <span class="text-gray-600 w-20 shrink-0">{{ msg.timestamp.toLocaleTimeString() }}</span>
-                <span :class="msg.role === 'user' ? 'text-blue-400' : msg.role === 'system' ? 'text-red-400' : 'text-green-400'">
-                  [{{ msg.role.toUpperCase() }}]
-                </span>
-                <span class="text-gray-400 truncate">{{ msg.content.substring(0, 80) }}{{ msg.content.length > 80 ? '...' : '' }}</span>
-              </div>
+              <Badge variant="green">active</Badge>
             </div>
+          </Card>
+          <div v-else class="text-center py-16 text-gray-500">
+            <div class="text-3xl mb-2 opacity-40">📋</div>
+            <div class="text-sm">No sessions yet</div>
           </div>
         </div>
+      </div>
 
-      </main>
+      <!-- ═══ CONFIG VIEW ═══ -->
+      <div v-else-if="currentView === 'config'" class="flex-1 overflow-y-auto px-6 py-6">
+        <div class="max-w-2xl space-y-6">
+
+          <!-- Active Provider -->
+          <Card title="Active Provider">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-xs text-gray-500 block mb-1">Provider</label>
+                <select v-model="activeProvider" @change="saveConfig"
+                  class="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-3 py-2.5 text-sm text-white focus:border-green-500/50">
+                  <option value="">Select provider</option>
+                  <option v-for="p in providers" :key="p.name" :value="p.name">{{ p.name }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs text-gray-500 block mb-1">Model</label>
+                <select v-model="activeModel" @change="saveConfig"
+                  class="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-3 py-2.5 text-sm text-white focus:border-green-500/50">
+                  <option value="">Select model</option>
+                  <option v-for="m in providers.find(p => p.name === activeProvider)?.models || []" :key="m" :value="m">{{ m }}</option>
+                </select>
+              </div>
+            </div>
+          </Card>
+
+          <!-- Providers -->
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-semibold">Providers</h2>
+            <Button @click="showAddProvider = !showAddProvider">
+              {{ showAddProvider ? 'Cancel' : '+ Add' }}
+            </Button>
+          </div>
+
+          <div v-for="p in providers" :key="p.name" class="space-y-2">
+            <Card>
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center gap-2">
+                  <div class="w-2 h-2 rounded-full bg-green-500"></div>
+                  <span class="font-medium">{{ p.name }}</span>
+                </div>
+                <button @click="removeProvider(p.name)" class="text-xs text-gray-500 hover:text-red-400">Remove</button>
+              </div>
+              <div class="text-xs text-gray-500 font-mono">{{ p.baseUrl }}</div>
+              <div class="flex gap-2 mt-2 flex-wrap">
+                <Badge v-for="m in p.models" :key="m" size="sm">{{ m }}</Badge>
+                <span v-if="p.models.length === 0" class="text-xs text-gray-600">No models configured</span>
+              </div>
+            </Card>
+          </div>
+
+          <!-- Add Form -->
+          <Card v-if="showAddProvider" title="Add Provider">
+            <div class="space-y-3">
+              <input v-model="newProvider.name" placeholder="Name (e.g., nan, deepseek)"
+                class="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-green-500/50" />
+              <input v-model="newProvider.baseUrl" placeholder="Base URL (https://api.example.com/v1)"
+                class="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-green-500/50" />
+              <input v-model="newProvider.apiKey" placeholder="API Key" type="password"
+                class="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-green-500/50" />
+              <Button @click="addProvider" variant="primary">Save Provider</Button>
+            </div>
+          </Card>
+
+          <div v-if="providers.length === 0 && !showAddProvider" class="text-center py-12 text-gray-500">
+            <div class="text-4xl mb-3 opacity-30">🔌</div>
+            <div class="text-sm">No providers configured</div>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 </template>
