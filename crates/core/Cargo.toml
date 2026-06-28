@@ -25,3 +25,6 @@ dashmap.workspace = true
 chrono.workspace = true
 rand.workspace = true
 async-trait.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+futures-util.workspace = true

@@ -10,6 +10,7 @@ pub mod r#loop;
 pub mod machine;
 pub mod workflow;
 pub mod orchestrator;
+pub mod api;
 
 // Re-exports for convenience
 pub use actor::*;
