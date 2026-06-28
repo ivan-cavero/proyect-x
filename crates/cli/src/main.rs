@@ -140,6 +140,10 @@ enum Commands {
     #[command(subcommand)]
     Billing(BillingCommands),
 
+    /// VPS deployment
+    #[command(subcommand)]
+    Deploy(DeployCommands),
+
     /// Run a comprehensive test
     Test,
 }
@@ -203,6 +207,18 @@ enum OrgCommands {
 enum BillingCommands {
     Show,
     Invoices,
+}
+
+#[derive(Subcommand)]
+enum DeployCommands {
+    /// Configure VPS deployment
+    Setup { host: String },
+    /// Push project to VPS
+    Push,
+    /// Check VPS status
+    Status,
+    /// Stream logs from VPS
+    Logs { #[arg(long)] tail: bool },
 }
 
 #[tokio::main]
@@ -784,6 +800,26 @@ async fn main() -> anyhow::Result<()> {
                 println!("  Usage: 0 tokens");
             }
             BillingCommands::Invoices => println!("{} No invoices", "→".cyan()),
+        },
+
+        Commands::Deploy(cmd) => match cmd {
+            DeployCommands::Setup { host } => {
+                println!("{} Setting up VPS deployment...", "→".cyan());
+                commands::deploy::setup(&host).await.map_err(|e| anyhow::anyhow!(e))?;
+                println!("{} Deployment configured", "✓".green());
+            }
+            DeployCommands::Push => {
+                println!("{} Pushing to VPS...", "→".cyan());
+                commands::deploy::push().await.map_err(|e| anyhow::anyhow!(e))?;
+                println!("{} Push complete", "✓".green());
+            }
+            DeployCommands::Status => {
+                println!("{} Checking VPS status...", "→".cyan());
+                commands::deploy::status().await.map_err(|e| anyhow::anyhow!(e))?;
+            }
+            DeployCommands::Logs { tail } => {
+                commands::deploy::logs(tail).await.map_err(|e| anyhow::anyhow!(e))?;
+            }
         },
     }
 
