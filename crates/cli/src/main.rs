@@ -56,6 +56,18 @@ enum Commands {
         /// JSON output for CI/CD
         #[arg(long)]
         headless: bool,
+
+        /// Override agents (comma-separated: coder,reviewer)
+        #[arg(long)]
+        agents: Option<String>,
+
+        /// Override agent properties (e.g., --agent.coder.model claude-4-opus)
+        #[arg(long, action = clap::ArgAction::Append)]
+        agent: Vec<String>,
+
+        /// Number of parallel reviewers
+        #[arg(long)]
+        parallel_reviewers: Option<u32>,
     },
 
     /// Manage projects
@@ -224,8 +236,22 @@ async fn main() -> anyhow::Result<()> {
         }
 
         // ─── Run ───────────────────────────────────────────
-        Commands::Run { goal, file, resume, session, dry_run, headless } => {
+        Commands::Run { goal, file, resume, session, dry_run, headless, agents, agent: agent_overrides, parallel_reviewers } => {
             if let Some(g) = goal {
+                // Parse agent overrides
+                let mut overrides = std::collections::HashMap::new();
+                for arg in &agent_overrides {
+                    if let Some((key, value)) = arg.split_once('=') {
+                        overrides.insert(key.to_string(), value.to_string());
+                    }
+                }
+
+                // Parse agents list
+                let agents_list: Vec<String> = agents
+                    .as_ref()
+                    .map(|a| a.split(',').map(|s| s.trim().to_string()).collect())
+                    .unwrap_or_default();
+
                 if dry_run {
                     // Dry run: show plan without executing
                     println!("{} Goal: {}", "→".cyan(), g.white().bold());
@@ -238,6 +264,32 @@ async fn main() -> anyhow::Result<()> {
 
                     println!();
                     println!("  {} Agents that would be spawned:", "1.".cyan());
+
+                    // Show configured agents or defaults
+                    let agent_names = if !agents_list.is_empty() {
+                        agents_list.clone()
+                    } else {
+                        vec![
+                            "architect".to_string(),
+                            "coder".to_string(),
+                            "reviewer".to_string(),
+                            "security".to_string(),
+                            "tester".to_string(),
+                        ]
+                    };
+
+                    for agent_name in &agent_names {
+                        let override_info = overrides.get(&format!("{}.model", agent_name))
+                            .map(|m| format!(" (override: {})", m))
+                            .unwrap_or_default();
+                        println!("    {} {}{}", "•".dimmed(), agent_name.cyan(), override_info.dimmed());
+                    }
+
+                    // Show parallel reviewers if set
+                    if let Some(pr) = parallel_reviewers {
+                        println!();
+                        println!("  {} Parallel reviewers: {}", "2.".cyan(), pr);
+                    }
                     println!("    {} architect (claude-4-opus)", "•".dimmed());
                     println!("    {} coder (gpt-5)", "•".dimmed());
                     println!("    {} reviewer (gemini-2.5-pro)", "•".dimmed());
@@ -245,27 +297,36 @@ async fn main() -> anyhow::Result<()> {
                     println!("    {} tester (gpt-5)", "•".dimmed());
 
                     println!();
-                    println!("  {} Phases:", "2.".cyan());
+                    println!("  {} Phases:", "3.".cyan());
                     println!("    {} Planning → Designing → Implementing", "•".dimmed());
                     println!("    {} Reviewing → Testing → Finalizing", "•".dimmed());
 
                     println!();
-                    println!("  {} Context Budget:", "3.".cyan());
+                    println!("  {} Context Budget:", "4.".cyan());
                     println!("    {} Model: gpt-5 (128k context)", "•".dimmed());
                     println!("    {} Hard limit: 89,600 tokens (70%)", "•".dimmed());
                     println!("    {} Profile: balanced", "•".dimmed());
 
                     println!();
-                    println!("  {} Estimated Cost:", "4.".cyan());
+                    println!("  {} Estimated Cost:", "5.".cyan());
                     println!("    {} ~15,000 input tokens", "•".dimmed());
                     println!("    {} ~5,000 output tokens", "•".dimmed());
                     println!("    {} ~$0.03-0.05 (GPT-5)", "•".dimmed());
 
                     println!();
-                    println!("  {} Hard Limits:", "5.".cyan());
+                    println!("  {} Hard Limits:", "6.".cyan());
                     println!("    {} Max iterations: 50", "•".dimmed());
                     println!("    {} Session TTL: 60 min", "•".dimmed());
                     println!("    {} Phase timeout: 5 min", "•".dimmed());
+
+                    // Show overrides if any
+                    if !overrides.is_empty() {
+                        println!();
+                        println!("  {} Overrides:", "7.".cyan());
+                        for (key, value) in &overrides {
+                            println!("    {} {} = {}", "•".dimmed(), key, value);
+                        }
+                    }
 
                     println!();
                     println!("{} Run without --dry-run to execute", "→".cyan());
