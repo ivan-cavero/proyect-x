@@ -77,7 +77,6 @@ fn e2e_cli_init_creates_project() {
 
     // Verify files were created
     assert!(test_dir.join("forge.toml").exists(), "forge.toml should exist");
-    assert!(test_dir.join(".forge").exists(), ".forge directory should exist");
     assert!(test_dir.join(".gitignore").exists(), ".gitignore should exist");
 
     // Verify forge.toml content

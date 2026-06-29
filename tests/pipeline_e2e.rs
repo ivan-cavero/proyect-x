@@ -71,7 +71,7 @@ tools = ["filesystem", "execute_command"]
     // Create runtime and run goal
     let mut runtime = project_x_core::CoreRuntime::new().await.expect("Failed to create runtime");
 
-    let result = runtime.run_goal("build a REST API for user management", Some(&config_path))
+    let result = runtime.run_goal("build a REST API for user management", Some(&config_path), None)
         .await
         .expect("Failed to run goal");
 

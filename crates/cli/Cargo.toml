@@ -11,6 +11,7 @@ project-x-persistence = { path = "../persistence" }
 project-x-providers = { path = "../providers" }
 project-x-agent-traits = { path = "../agent-traits" }
 project-x-memory = { path = "../memory" }
+project-x-vault = { path = "../vault" }
 
 clap.workspace = true
 tokio.workspace = true

@@ -2,64 +2,67 @@
 
 use std::path::Path;
 
-/// Default forge.toml template
+/// Default forge.toml template — providers configured via env vars or Settings page.
 const FORGE_TOML: &str = r#"# Project-X Configuration
-# https://github.com/ivan-cavero/proyect-x
+# Created: {date}
+# API keys: manage via Dashboard Settings page or environment variables
 
 [project]
 name = "{name}"
 version = "0.1.0"
 
 # ─── Providers ────────────────────────────────────────
+# API keys are managed via the Dashboard Settings page.
+# The vault stores them encrypted. No keys hardcoded here.
 
-[providers.openai]
-api_key = "keyring:openai"
-default_model = "gpt-5"
-
-[providers.anthropic]
-api_key = "keyring:anthropic"
-default_model = "claude-4-opus"
-
-[providers.gemini]
-api_key = "keyring:gemini"
-default_model = "gemini-2.5-pro"
+[providers.nan]
+base_url = "https://api.nan.builders/v1"
+api_key = "env:NAN_API_KEY"
+default_model = "qwen3.6"
 
 # ─── Roles ────────────────────────────────────────────
 
 [roles.architect]
 description = "System design and architecture"
-model = "claude-4-opus"
+model = "claude-sonnet-4-20250514"
 temperature = 0.2
 system_prompt = "You are a senior software architect specialized in Rust systems."
 tools = ["filesystem", "web_search"]
 
 [roles.coder]
 description = "Code generation and implementation"
-model = "gpt-5"
+model = "gpt-4o"
 temperature = 0.3
 system_prompt = "You are an expert Rust engineer. Write production-quality code."
 tools = ["filesystem", "execute_command"]
 
 [roles.reviewer]
 description = "Code review and quality assurance"
-model = "gemini-2.5-pro"
+model = "gpt-4o"
 temperature = 0.2
 system_prompt = "You are a senior code reviewer. Analyze code critically."
 tools = ["filesystem"]
 
 [roles.security]
 description = "Security audit and vulnerability scanning"
-model = "claude-4-haiku"
+model = "claude-sonnet-4-20250514"
 temperature = 0.1
 system_prompt = "You are a security auditor. Check for vulnerabilities."
 tools = ["filesystem", "grep"]
 
 [roles.tester]
 description = "Test generation and execution"
-model = "gpt-5"
+model = "gpt-4o"
 temperature = 0.2
 system_prompt = "You are a QA engineer. Generate comprehensive tests."
 tools = ["filesystem", "execute_command"]
+
+[roles.researcher]
+description = "Technical research and documentation"
+model = "gpt-4o"
+temperature = 0.3
+system_prompt = "You are a technical researcher. Find best practices."
+tools = ["web_search", "read_url"]
 
 # ─── Goals ────────────────────────────────────────────
 
@@ -83,12 +86,6 @@ max_iterations_per_goal = 50
 max_iterations_per_phase = 5
 session_ttl_seconds = 3600
 phase_timeout_seconds = 300
-
-# ─── MCP Servers ──────────────────────────────────────
-
-[[mcp_servers]]
-name = "filesystem"
-command = "project-x-mcp-filesystem"
 "#;
 
 /// Create a new project with forge.toml
@@ -103,11 +100,11 @@ pub fn init_project(name: &str) -> anyhow::Result<()> {
     // Create project directory
     std::fs::create_dir_all(project_dir)?;
 
-    // Create .forge directory
-    std::fs::create_dir_all(project_dir.join(".forge"))?;
-
-    // Generate forge.toml
-    let content = FORGE_TOML.replace("{name}", name);
+    // Generate forge.toml with current date
+    let date = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC");
+    let content = FORGE_TOML
+        .replace("{name}", name)
+        .replace("{date}", date.to_string().as_str());
     std::fs::write(project_dir.join("forge.toml"), content)?;
 
     // Create .gitignore
@@ -117,7 +114,6 @@ pub fn init_project(name: &str) -> anyhow::Result<()> {
     )?;
 
     println!("  Created: {}/forge.toml", name);
-    println!("  Created: {}/.forge/", name);
     println!("  Created: {}/.gitignore", name);
 
     Ok(())

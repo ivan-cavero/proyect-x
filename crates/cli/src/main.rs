@@ -9,6 +9,36 @@ use clap::{Parser, Subcommand};
 use colored::Colorize;
 use std::path::PathBuf;
 
+/// Load vault service from .forge/credentials.vault.json if it exists.
+fn load_vault() -> Option<std::sync::Arc<project_x_vault::VaultService>> {
+    let vault_path = PathBuf::from(".forge").join("credentials.vault.json");
+    if vault_path.exists() {
+        let vault = std::sync::Arc::new(
+            project_x_vault::VaultService::with_path(vault_path.clone(), None)
+        );
+        if vault.init().is_ok() {
+            tracing::info!("Vault loaded from {}", vault_path.display());
+            return Some(vault);
+        }
+    }
+    None
+}
+
+/// Find forge.toml config file in current directory or parent directories.
+fn find_forge_config() -> Option<PathBuf> {
+    let mut path = std::env::current_dir().ok()?;
+    loop {
+        let config = path.join("forge.toml");
+        if config.exists() {
+            return Some(config);
+        }
+        if !path.pop() {
+            break;
+        }
+    }
+    None
+}
+
 #[derive(Parser)]
 #[command(name = "project-x")]
 #[command(about = "Autonomous Multi-Agent System", long_about = None)]
@@ -328,7 +358,12 @@ async fn main() -> anyhow::Result<()> {
                     // Headless: JSON output
                     println!("{} Running in headless mode", "→".cyan());
                     let mut runtime = project_x_core::CoreRuntime::new().await?;
-                    let result = runtime.run_goal(&g, None).await?;
+
+                    // Load vault if exists
+                    let vault = load_vault();
+
+                    let config_path = find_forge_config();
+                    let result = runtime.run_goal(&g, config_path.as_deref(), vault.as_ref().map(|v| &**v)).await?;
 
                     let json_result = serde_json::json!({
                         "status": if result.passed { "completed" } else { "failed" },
@@ -351,10 +386,14 @@ async fn main() -> anyhow::Result<()> {
                     println!("{}", "📦 Starting core runtime...".dimmed());
                     let mut runtime = project_x_core::CoreRuntime::new().await?;
 
+                    // Load vault if exists
+                    let vault = load_vault();
+
                     println!("{}", "🤖 Initializing agent pipeline...".dimmed());
 
+                    let config_path = find_forge_config();
                     // Run through the full agent pipeline
-                    let result = runtime.run_goal(&g, None).await?;
+                    let result = runtime.run_goal(&g, config_path.as_deref(), vault.as_ref().map(|v| &**v)).await?;
 
                     println!();
                     println!("  {} Goal: {}", "→".cyan(), result.goal.white().bold());
@@ -869,3 +908,4 @@ async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+

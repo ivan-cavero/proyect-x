@@ -28,6 +28,7 @@ pub use orchestrator::roles::ResolvedRole as AgentRoleResolved;
 pub use orchestrator::{Task, TaskResult, TaskStatus};
 
 use project_x_mcp_host::McpHost;
+use project_x_vault::VaultService;
 
 use thiserror::Error;
 
@@ -108,21 +109,152 @@ impl CoreRuntime {
         }
     }
 
+    /// Initialize a ProviderRouter from forge.toml providers + vault/env.
+    ///
+    /// For each provider in forge.toml, resolves the API key from:
+    /// 1. VaultService (if key stored via Settings)
+    /// 2. Environment variable (fallback for env:VAR_NAME references)
+    /// 3. Literal key in config (warning: insecure)
+    pub async fn init_providers(
+        &self,
+        config: &ForgeConfig,
+        vault: Option<&VaultService>,
+    ) -> project_x_providers::ProviderRouter {
+        let mut router = project_x_providers::ProviderRouter::new();
+
+        for (name, provider_cfg) in &config.providers {
+            tracing::info!("Initializing provider: {} ({})", name, provider_cfg.base_url);
+
+            // Resolve API key
+            let api_key = self.resolve_api_key(&provider_cfg.api_key_ref, vault, name);
+
+            if api_key.is_empty() {
+                tracing::warn!("No API key for provider '{}'. Agent will use mock behavior.", name);
+                continue;
+            }
+
+            let provider: std::sync::Arc<dyn project_x_providers::LLMProvider> =
+                match provider_cfg.name.as_str() {
+                    "nan" | "openai" | "openai_compat" => {
+                        std::sync::Arc::new(project_x_providers::OpenAIProvider::new(
+                            api_key,
+                            provider_cfg.default_model.clone(),
+                            Some(provider_cfg.base_url.clone()),
+                            None,
+                            None,
+                        ))
+                    }
+                    "anthropic" => {
+                        std::sync::Arc::new(project_x_providers::AnthropicProvider::new(
+                            api_key,
+                            provider_cfg.default_model.clone(),
+                            Some(provider_cfg.base_url.clone()),
+                            None,
+                            None,
+                        ))
+                    }
+                    "gemini" => {
+                        std::sync::Arc::new(project_x_providers::GeminiProvider::new(
+                            api_key,
+                            provider_cfg.default_model.clone(),
+                            Some(provider_cfg.base_url.clone()),
+                            None,
+                            None,
+                        ))
+                    }
+                    "ollama" => {
+                        std::sync::Arc::new(project_x_providers::OllamaProvider::new(
+                            provider_cfg.default_model.clone(),
+                            Some(provider_cfg.base_url.clone()),
+                        ))
+                    }
+                    _ => {
+                        // Default to OpenAI-compatible provider
+                        std::sync::Arc::new(project_x_providers::OpenAIProvider::new(
+                            api_key,
+                            provider_cfg.default_model.clone(),
+                            Some(provider_cfg.base_url.clone()),
+                            None,
+                            None,
+                        ))
+                    }
+                };
+
+            router.register(name, provider, project_x_providers::ModelTier::Balanced);
+            tracing::info!("Provider '{}' registered with model '{}'", name, provider_cfg.default_model);
+        }
+
+        router
+    }
+
+    /// Resolve an API key from vault, env, or config literal.
+    fn resolve_api_key(&self, ref_str: &str, vault: Option<&VaultService>, provider_name: &str) -> String {
+        // 1. Try vault first (keys stored via Settings)
+        if let Some(v) = vault {
+            if let Ok(Some(key)) = v.get(provider_name) {
+                if !key.is_empty() {
+                    tracing::info!("Loaded API key for '{}' from vault", provider_name);
+                    return key;
+                }
+            }
+        }
+
+        // 2. Try env:VAR_NAME reference
+        if let Some(var_name) = ref_str.strip_prefix("env:") {
+            if let Ok(value) = std::env::var(var_name) {
+                if !value.is_empty() {
+                    tracing::info!("Loaded API key for '{}' from env:{}", provider_name, var_name);
+                    return value;
+                }
+            }
+        }
+
+        // 3. Try literal key in config
+        if !ref_str.is_empty() {
+            if ref_str.starts_with("sk-") || ref_str.starts_with("xai-") {
+                tracing::warn!("⚠️  Using literal API key in config for '{}' — consider using Settings page", provider_name);
+            }
+            return ref_str.to_string();
+        }
+
+        String::new()
+    }
+
     /// Run a goal through the full agent pipeline.
     ///
     /// Flow: Planning → Designing → Implementing → Reviewing → Testing → Finalizing
     /// Each phase spawns the appropriate agents and collects results.
-    pub async fn run_goal(&mut self, goal: &str, config_path: Option<&std::path::Path>) -> Result<GoalResult> {
+    ///
+    /// If `vault` is provided, providers are initialized from forge.toml + vault keys.
+    /// When no forge.toml exists, runs using default mock agents.
+    pub async fn run_goal(
+        &mut self,
+        goal: &str,
+        config_path: Option<&std::path::Path>,
+        vault: Option<&VaultService>,
+    ) -> Result<GoalResult> {
         tracing::info!("Starting goal: {}", goal);
 
-        // Load config from forge.toml
-        let config = match config_path {
-            Some(path) => load_forge_config(path)?,
+        // Load config from forge.toml or use empty (no config = mock agents)
+        let config = match config_path.map(load_forge_config) {
+            Some(Ok(cfg)) => cfg,
+            Some(Err(e)) => {
+                tracing::warn!("Failed to load config: {}. Using defaults.", e);
+                ForgeConfig::empty()
+            }
             None => {
-                tracing::warn!("No config path provided, using defaults");
-                ForgeConfig::default()
+                tracing::info!("No forge.toml found. Using default mock agents.");
+                ForgeConfig::empty()
             }
         };
+
+        // Initialize providers from config + vault/env (if any)
+        let provider_router = self.init_providers(&config, vault).await;
+
+        // If no config loaded, use a default coder agent
+        if config.roles.is_empty() {
+            tracing::info!("No roles defined in config. Using default coder role.");
+        }
 
         // Start the loop
         self.loop_controller.start();
@@ -156,9 +288,21 @@ impl CoreRuntime {
                     goal,
                 );
 
-                let agent = crate::actor::roles::AgentFactory::create(
-                    &orchestrator::roles::ResolvedRole::resolve(role_config, None),
-                );
+                // Try to resolve a real LLM provider for this role's model
+                let resolved_role = orchestrator::roles::ResolvedRole::resolve(role_config, None);
+                let agent = match provider_router.resolve(&role_config.model) {
+                    Ok(provider) => {
+                        crate::actor::roles::AgentFactory::create_with_provider(&resolved_role, provider)
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            "No provider found for model '{}'. Using mock agent for '{}'.",
+                            role_config.model,
+                            role_config.name
+                        );
+                        crate::actor::roles::AgentFactory::create(&resolved_role)
+                    }
+                };
 
                 let result = agent.execute(&task);
                 tracing::info!(
@@ -258,6 +402,16 @@ pub struct ForgeConfig {
     pub roles: std::collections::HashMap<String, orchestrator::RoleConfig>,
     pub goals: Vec<orchestrator::GoalConfig>,
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Provider definitions from [providers.*] sections. Key is provider name.
+    pub providers: std::collections::HashMap<String, ProviderConfig>,
+}
+
+/// Provider configuration from forge.toml [providers.*].
+pub struct ProviderConfig {
+    pub name: String,
+    pub base_url: String,
+    pub api_key_ref: String, // "env:VAR" | "vault:provider_name" | "literal-key"
+    pub default_model: String,
 }
 
 /// MCP server configuration from forge.toml.
@@ -269,67 +423,21 @@ pub struct McpServerConfig {
 
 impl Default for ForgeConfig {
     fn default() -> Self {
-        let mut roles = std::collections::HashMap::new();
-        roles.insert("architect".to_string(), orchestrator::RoleConfig {
-            name: "architect".to_string(),
-            model: "gpt-4o".to_string(),
-            temperature: 0.3,
-            max_tokens: 4096,
-            system_prompt: Some("You are a senior software architect.".to_string()),
-            tools: vec!["filesystem".to_string()],
-            ..Default::default()
-        });
-        roles.insert("coder".to_string(), orchestrator::RoleConfig {
-            name: "coder".to_string(),
-            model: "gpt-4o".to_string(),
-            temperature: 0.3,
-            max_tokens: 4096,
-            system_prompt: Some("You are an expert Rust engineer.".to_string()),
-            tools: vec!["filesystem".to_string(), "execute_command".to_string()],
-            ..Default::default()
-        });
-        roles.insert("reviewer".to_string(), orchestrator::RoleConfig {
-            name: "reviewer".to_string(),
-            model: "gpt-4o".to_string(),
-            temperature: 0.2,
-            max_tokens: 4096,
-            system_prompt: Some("You are a senior code reviewer.".to_string()),
-            tools: vec!["filesystem".to_string()],
-            ..Default::default()
-        });
-        roles.insert("security".to_string(), orchestrator::RoleConfig {
-            name: "security".to_string(),
-            model: "gpt-4o-mini".to_string(),
-            temperature: 0.1,
-            max_tokens: 4096,
-            system_prompt: Some("You are a security auditor.".to_string()),
-            tools: vec!["filesystem".to_string()],
-            ..Default::default()
-        });
-        roles.insert("tester".to_string(), orchestrator::RoleConfig {
-            name: "tester".to_string(),
-            model: "gpt-4o".to_string(),
-            temperature: 0.2,
-            max_tokens: 4096,
-            system_prompt: Some("You are a QA engineer.".to_string()),
-            tools: vec!["filesystem".to_string(), "execute_command".to_string()],
-            ..Default::default()
-        });
+        // Deprecated — use ForgeConfig::empty() instead.
+        // Default impl kept for backward compatibility with tests.
+        Self::empty()
+    }
+}
 
+impl ForgeConfig {
+    /// Create an empty config (no roles, no providers, no goals).
+    /// Used when no forge.toml exists — agents run in mock mode.
+    pub fn empty() -> Self {
         Self {
-            roles,
-            goals: vec![orchestrator::GoalConfig {
-                name: "full-feature".to_string(),
-                agents: vec![
-                    "architect".to_string(),
-                    "coder".to_string(),
-                    "reviewer".to_string(),
-                    "security".to_string(),
-                    "tester".to_string(),
-                ],
-                ..Default::default()
-            }],
+            roles: std::collections::HashMap::new(),
+            goals: Vec::new(),
             mcp_servers: Vec::new(),
+            providers: std::collections::HashMap::new(),
         }
     }
 }
@@ -344,6 +452,7 @@ pub fn load_forge_config(path: &std::path::Path) -> Result<ForgeConfig> {
 
     let mut roles = std::collections::HashMap::new();
     let mut mcp_servers = Vec::new();
+    let mut providers = std::collections::HashMap::new();
 
     // Parse roles from [roles.*] sections
     if let Some(roles_table) = value.get("roles").and_then(|v| v.as_table()) {
@@ -366,6 +475,31 @@ pub fn load_forge_config(path: &std::path::Path) -> Result<ForgeConfig> {
         }
     }
 
+    // Parse providers from [providers.*] sections
+    if let Some(providers_table) = value.get("providers").and_then(|v| v.as_table()) {
+        for (name, provider_value) in providers_table {
+            let base_url = provider_value.get("base_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://api.openai.com/v1")
+                .to_string();
+            let api_key_ref = provider_value.get("api_key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let default_model = provider_value.get("default_model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("gpt-4o")
+                .to_string();
+
+            providers.insert(name.clone(), ProviderConfig {
+                name: name.clone(),
+                base_url,
+                api_key_ref,
+                default_model,
+            });
+        }
+    }
+
     // Parse MCP servers from [[mcp_servers]] sections
     if let Some(servers_array) = value.get("mcp_servers").and_then(|v| v.as_array()) {
         for server_value in servers_array {
@@ -383,6 +517,7 @@ pub fn load_forge_config(path: &std::path::Path) -> Result<ForgeConfig> {
         roles,
         goals: Vec::new(),
         mcp_servers,
+        providers,
     })
 }
 
