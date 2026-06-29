@@ -4,14 +4,23 @@
 # Usage: .\launch.ps1
 #
 # Launches:
-#   1. Backend API server (port 8080)
-#   2. Frontend dev server (port 3000)
+#   1. Backend API server via project-x.exe (port 8080)
+#   2. Frontend dev server via npm (port 3000)
 #
 # Then opens the dashboard in your default browser.
+#
+# API keys: manage them via Settings page in the dashboard.
+# No env vars needed.
 
 $ErrorActionPreference = "Stop"
 
 $root = $PSScriptRoot
+$exe = Join-Path $root "target\release\project-x.exe"
+
+# Fallback to debug if release not built
+if (-not (Test-Path $exe)) {
+    $exe = Join-Path $root "target\debug\project-x.exe"
+}
 
 Write-Host ""
 Write-Host "  ╔══════════════════════════════════════════╗" -ForegroundColor Cyan
@@ -21,13 +30,14 @@ Write-Host ""
 
 # ─── 1. Backend ─────────────────────────────────────────
 Write-Host "  [1/3] Starting backend API server..." -ForegroundColor Yellow
+Write-Host "        Exe: $($exe)" -ForegroundColor Gray
 Write-Host "        Port: 8080" -ForegroundColor Gray
 
-$backend = Start-Process -FilePath "cargo" `
-    -ArgumentList "run", "-p", "project-x-cli", "--", "server" `
+$backend = Start-Process -FilePath $exe `
+    -ArgumentList "server" `
     -WorkingDirectory $root `
     -PassThru `
-    -NoNewWindow
+    -WindowStyle Hidden
 
 Write-Host "  ✓ Backend started (PID: $($backend.Id))" -ForegroundColor Green
 Write-Host ""
@@ -44,7 +54,7 @@ $frontend = Start-Process -FilePath "npm" `
     -ArgumentList "run", "dev" `
     -WorkingDirectory $dashboard `
     -PassThru `
-    -NoNewWindow
+    -WindowStyle Hidden
 
 Write-Host "  ✓ Frontend started (PID: $($frontend.Id))" -ForegroundColor Green
 Write-Host ""
@@ -62,9 +72,11 @@ Write-Host "  ╔═════════════════════
 Write-Host "  ║  Dashboard: http://localhost:3000        ║" -ForegroundColor Green
 Write-Host "  ║  API:       http://localhost:8080        ║" -ForegroundColor Green
 Write-Host "  ║  Health:    http://localhost:8080/api/health" -ForegroundColor Green
+Write-Host "  ║  Settings:  Dashboard → Settings tab     ║" -ForegroundColor Green
 Write-Host "  ╚══════════════════════════════════════════╝" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Press Ctrl+C in any terminal to stop everything." -ForegroundColor Gray
+Write-Host "  API keys: Manage them in Settings (no env vars needed)" -ForegroundColor Gray
+Write-Host "  Press Ctrl+C in this terminal to stop everything." -ForegroundColor Gray
 Write-Host ""
 
 # Wait for user to press Ctrl+C
