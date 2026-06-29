@@ -12,37 +12,37 @@ default_model = "qwen3.6"
 # ─── Roles ────────────────────────────────────────────
 
 [roles.architect]
-model = "qwen3.6"
+model = "claude-sonnet-4-20250514"
 temperature = 0.6
 system_prompt = "You are a senior software architect specialized in Rust systems."
 tools = ["filesystem", "web_search"]
 
 [roles.coder]
-model = "qwen3.6"
+model = "gpt-4o"
 temperature = 0.6
 system_prompt = "You are an expert Rust engineer. Write production-quality code."
 tools = ["filesystem", "execute_command"]
 
 [roles.reviewer]
-model = "qwen3.6"
+model = "gpt-4o"
 temperature = 0.6
 system_prompt = "You are a senior code reviewer. Analyze code critically."
 tools = ["filesystem"]
 
 [roles.security]
-model = "qwen3.6"
+model = "claude-sonnet-4-20250514"
 temperature = 0.6
 system_prompt = "You are a security auditor. Check for vulnerabilities."
 tools = ["filesystem", "grep"]
 
 [roles.tester]
-model = "qwen3.6"
+model = "gpt-4o"
 temperature = 0.6
 system_prompt = "You are a QA engineer. Generate comprehensive tests."
 tools = ["filesystem", "execute_command"]
 
 [roles.researcher]
-model = "qwen3.6"
+model = "gpt-4o"
 temperature = 0.6
 system_prompt = "You are a technical researcher. Find best practices."
 tools = ["web_search", "read_url"]
