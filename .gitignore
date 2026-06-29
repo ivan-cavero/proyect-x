@@ -35,6 +35,10 @@ desktop/src-tauri/gen/
 *.crt
 *.cert
 
+# --- User project config (never commit API keys) ---
+# User's forge.toml may contain api_key — keep it local
+# forge.toml in project root is safe (uses env: prefix)
+
 # --- Configuration (local) ---
 .forge/config.local.toml
 

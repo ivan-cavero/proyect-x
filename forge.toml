@@ -6,7 +6,7 @@ version = "0.1.0"
 
 [providers.nan]
 base_url = "https://api.nan.builders/v1"
-api_key = "REDACTED_KEY_ROTATED"
+api_key = "env:NAN_API_KEY"
 default_model = "qwen3.6"
 
 # ─── Roles ────────────────────────────────────────────
