@@ -9,6 +9,7 @@ project-x-shared = { path = "../shared" }
 
 tokio.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 
