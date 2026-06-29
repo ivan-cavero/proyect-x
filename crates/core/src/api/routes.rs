@@ -10,6 +10,7 @@ pub struct AppState {
     pub version: String,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub bus: crate::EventBus,
+    pub auth: std::sync::Arc<super::auth::AuthState>,
 }
 
 /// API server configuration.
@@ -37,12 +38,13 @@ impl ApiServer {
         Self { config }
     }
 
-    /// Build the Axum router with all routes.
+    /// Build the Axum router with all routes and auth middleware.
     pub fn router(state: AppState) -> Router {
         let cors = tower_http::cors::CorsLayer::permissive();
+        let auth_state = state.auth.clone();
 
         Router::new()
-            // Health
+            // Health (exempt from auth)
             .route("/api/health", get(routes::health))
             // Projects
             .route("/api/projects", get(routes::list_projects))
@@ -54,20 +56,33 @@ impl ApiServer {
             .route("/api/metrics/summary", get(routes::metrics_summary))
             // Context
             .route("/api/metrics/context", get(routes::context_metrics))
-            // WebSocket
+            // WebSocket (exempt from auth)
             .route("/ws/global", get(super::ws::ws_handler))
             // State
             .with_state(Arc::new(state))
+            .layer(axum::middleware::from_fn_with_state(
+                auth_state,
+                super::auth::auth_middleware,
+            ))
             .layer(cors)
     }
 
     /// Start the server (non-blocking).
     pub async fn start(self) -> anyhow::Result<()> {
         let bus = crate::EventBus::new();
+
+        // Initialize JWT auth with auto-generated or loaded secret
+        let secret_path = std::path::PathBuf::from(".forge")
+            .join("jwt.secret");
+        let auth = std::sync::Arc::new(
+            super::auth::AuthState::from_file_or_create(&secret_path)
+        );
+
         let state = AppState {
             version: env!("CARGO_PKG_VERSION").to_string(),
             started_at: chrono::Utc::now(),
             bus,
+            auth,
         };
 
         let app = Self::router(state);
@@ -229,6 +244,7 @@ mod tests {
             version: "0.1.0".to_string(),
             started_at: chrono::Utc::now(),
             bus: crate::EventBus::new(),
+            auth: std::sync::Arc::new(crate::api::auth::AuthState::new(b"test-secret-key-for-testing-32bytes!!")),
         };
 
         let uptime = chrono::Utc::now()

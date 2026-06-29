@@ -120,6 +120,7 @@ mod tests {
             version: "test".to_string(),
             started_at: chrono::Utc::now(),
             bus: EventBus::new(),
+            auth: std::sync::Arc::new(crate::api::auth::AuthState::new(b"test-secret-key-for-testing-32bytes!!")),
         };
         handle_client_message(r#"{"type": "ping"}"#, &state);
     }
@@ -130,6 +131,7 @@ mod tests {
             version: "test".to_string(),
             started_at: chrono::Utc::now(),
             bus: EventBus::new(),
+            auth: std::sync::Arc::new(crate::api::auth::AuthState::new(b"test-secret-key-for-testing-32bytes!!")),
         };
         handle_client_message(
             r#"{"type": "inject", "target": "coder", "message": "use thiserror"}"#,
@@ -143,6 +145,7 @@ mod tests {
             version: "test".to_string(),
             started_at: chrono::Utc::now(),
             bus: EventBus::new(),
+            auth: std::sync::Arc::new(crate::api::auth::AuthState::new(b"test-secret-key-for-testing-32bytes!!")),
         };
         handle_client_message("not json", &state);
     }

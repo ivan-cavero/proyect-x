@@ -10,6 +10,9 @@ pub mod openai_compat;
 pub mod mock;
 pub mod router;
 
+#[cfg(test)]
+mod tests;
+
 pub use mock::MockProvider;
 pub use openai::OpenAIProvider;
 pub use anthropic::AnthropicProvider;
