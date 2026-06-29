@@ -4,6 +4,7 @@
 //! loop controller, drift detection, and context management.
 
 pub mod actor;
+pub mod api;
 pub mod bus;
 pub mod drift;
 pub mod r#loop;
@@ -129,6 +130,9 @@ impl CoreRuntime {
             project_x_shared::protocol::MessageKind::SessionHeartbeat,
             "core",
         );
+
+        // Advance state machine to Planning (first phase)
+        self.loop_controller.advance(machine::phase::Phase::Planning).ok();
 
         let mut results = Vec::new();
         let mut current_phase = machine::phase::Phase::Planning;
@@ -417,6 +421,7 @@ fn get_agents_for_phase(
 /// Get the next phase in the pipeline.
 fn get_next_phase(current: &machine::phase::Phase) -> machine::phase::Phase {
     match current {
+        machine::phase::Phase::Idle => machine::phase::Phase::Planning,
         machine::phase::Phase::Planning => machine::phase::Phase::Designing,
         machine::phase::Phase::Designing => machine::phase::Phase::Implementing,
         machine::phase::Phase::Implementing => machine::phase::Phase::Reviewing,
@@ -424,6 +429,8 @@ fn get_next_phase(current: &machine::phase::Phase) -> machine::phase::Phase {
         machine::phase::Phase::Testing => machine::phase::Phase::SecurityScan,
         machine::phase::Phase::SecurityScan => machine::phase::Phase::Finalizing,
         machine::phase::Phase::Finalizing => machine::phase::Phase::Completed,
+        machine::phase::Phase::Researching => machine::phase::Phase::Designing,
+        machine::phase::Phase::Fixing => machine::phase::Phase::Reviewing,
         _ => machine::phase::Phase::Completed,
     }
 }

@@ -1,0 +1,35 @@
+[package]
+name = "project-x-e2e"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[test]]
+name = "cli_e2e"
+path = "cli_e2e.rs"
+
+[[test]]
+name = "api_e2e"
+path = "api_e2e.rs"
+
+[[test]]
+name = "pipeline_e2e"
+path = "pipeline_e2e.rs"
+
+[dev-dependencies]
+project-x-core = { path = "../crates/core" }
+project-x-shared = { path = "../crates/shared" }
+project-x-memory = { path = "../crates/memory" }
+project-x-persistence = { path = "../crates/persistence" }
+project-x-providers = { path = "../crates/providers" }
+project-x-agent-traits = { path = "../crates/agent-traits" }
+
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+axum.workspace = true
+tower-http.workspace = true
