@@ -52,7 +52,13 @@ fn call_llm_sync(provider: &Option<Arc<dyn LLMProvider>>, task: &Task, system_pr
         tracing::debug!("In tokio runtime, using mock output for agent");
         return mock_output.to_string();
     }
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(error) => {
+            tracing::error!("Failed to create tokio runtime: {error}");
+            return "mock output (no runtime)".to_string();
+        }
+    };
     rt.block_on(call_llm_or_mock(provider, task, system_prompt, mock_output))
 }
 

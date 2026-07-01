@@ -115,7 +115,9 @@ impl VaultService {
         let mut store = HashMap::new();
         for (key, value) in entries {
             let resolved = if self.encrypted {
-                decrypt(&value, self.master_key.as_ref().unwrap())
+                let master_key = self.master_key.as_ref()
+                    .ok_or(VaultError::NoMasterKey)?;
+                decrypt(&value, master_key)
                     .unwrap_or_else(|_| value) // If decryption fails, store raw
             } else {
                 value
@@ -137,7 +139,8 @@ impl VaultService {
         }
 
         let entries: HashMap<String, String> = if self.encrypted {
-            let key = self.master_key.as_ref().unwrap();
+            let key = self.master_key.as_ref()
+                .ok_or(VaultError::NoMasterKey)?;
             store.iter()
                 .map(|(k, v)| {
                     let enc = encrypt(v, key).unwrap_or_else(|_| v.clone());
@@ -236,6 +239,9 @@ pub enum VaultError {
 
     #[error("Serialization error: {0}")]
     SerializationError(String),
+
+    #[error("No master key set for encryption")]
+    NoMasterKey,
 
     #[error("Lock error: {0}")]
     LockError(String),

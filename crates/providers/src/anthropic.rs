@@ -25,19 +25,19 @@ impl AnthropicProvider {
         base_url: Option<String>,
         timeout: Option<std::time::Duration>,
         max_retries: Option<u32>,
-    ) -> Self {
+    ) -> Result<Self, crate::ProviderInitError> {
         let client = reqwest::Client::builder()
             .timeout(timeout.unwrap_or(std::time::Duration::from_secs(120)))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|error| crate::ProviderInitError(format!("Failed to build HTTP client: {error}")))?;
 
-        Self {
+        Ok(Self {
             client,
             base_url: base_url.unwrap_or_else(|| "https://api.anthropic.com".to_string()),
             api_key,
             model,
             max_retries: max_retries.unwrap_or(3),
-        }
+        })
     }
 
     fn messages_url(&self) -> String {

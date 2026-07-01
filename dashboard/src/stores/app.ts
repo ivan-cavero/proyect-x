@@ -11,7 +11,7 @@ export const useAppStore = defineStore('app', () => {
 
   // Health
   const health = ref<HealthStatus | null>(null)
-  const loading = ref(false)
+  const isLoading = ref(false)
   const error = ref<string | null>(null)
 
   // Projects
@@ -31,24 +31,24 @@ export const useAppStore = defineStore('app', () => {
   })
 
   // Actions
-  async function refreshAll() {
-    loading.value = true
+async function refreshAll() {
+    isLoading.value = true
     error.value = null
     try {
       health.value = await api.getHealth()
       projects.value = await api.getProjects()
-    } catch (e: any) {
-      error.value = e.message
+    } catch (caughtError: any) {
+      error.value = caughtError.message
     }
-    loading.value = false
+    isLoading.value = false
   }
 
   async function selectProject(id: string) {
     try {
       activeProject.value = await api.getProject(id)
       activeConfig.value = await api.getProjectConfig(id)
-    } catch (e: any) {
-      error.value = e.message
+    } catch (caughtError: any) {
+      error.value = caughtError.message
     }
   }
 
@@ -58,29 +58,28 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function createProject(name: string, description = '') {
-    const p = await api.createProject(name, description)
-    projects.value.push(p)
-    return p
+    const project = await api.createProject(name, description)
+    projects.value = [...projects.value, project]
+    return project
   }
 
   async function updateProject(id: string, data: { name?: string; description?: string; forge_toml?: string }) {
-    const p = await api.updateProject(id, data)
-    const idx = projects.value.findIndex(x => x.id === id)
-    if (idx >= 0) projects.value[idx] = p
-    if (activeProject.value?.id === id) activeProject.value = p
-    return p
+    const updated = await api.updateProject(id, data)
+    const projectIndex = projects.value.findIndex(project => project.id === id)
+    if (projectIndex >= 0) projects.value[projectIndex] = updated
+    if (activeProject.value?.id === id) activeProject.value = updated
+    return updated
   }
 
   async function deleteProject(id: string) {
     await api.deleteProject(id)
-    projects.value = projects.value.filter(p => p.id !== id)
+    projects.value = projects.value.filter(project => project.id !== id)
     if (activeProject.value?.id === id) clearActiveProject()
   }
 
   async function saveProjectConfig(id: string, config: string) {
     const result = await api.updateProjectConfig(id, config)
     activeConfig.value = result
-    // Also update forge_toml in project
     if (activeProject.value) {
       activeProject.value.forge_toml = config
     }
@@ -88,7 +87,7 @@ export const useAppStore = defineStore('app', () => {
   }
 
   return {
-    health, loading, error,
+    health, isLoading, error,
     projects, activeProject, activeConfig,
     isHealthy, version, uptime,
     refreshAll, selectProject, clearActiveProject,

@@ -16,17 +16,17 @@ pub struct OllamaProvider {
 }
 
 impl OllamaProvider {
-    pub fn new(model: String, base_url: Option<String>) -> Self {
+    pub fn new(model: String, base_url: Option<String>) -> Result<Self, crate::ProviderInitError> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(300)) // Local models can be slow
+            .timeout(std::time::Duration::from_secs(300))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|error| crate::ProviderInitError(format!("Failed to build HTTP client: {error}")))?;
 
-        Self {
+        Ok(Self {
             client,
             base_url: base_url.unwrap_or_else(|| "http://localhost:11434".to_string()),
             model,
-        }
+        })
     }
 
     fn chat_url(&self) -> String {

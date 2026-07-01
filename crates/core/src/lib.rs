@@ -136,47 +136,76 @@ impl CoreRuntime {
             let provider: std::sync::Arc<dyn praxis_providers::LLMProvider> =
                 match provider_cfg.name.as_str() {
                     "nan" | "openai" | "openai_compat" => {
-                        std::sync::Arc::new(praxis_providers::OpenAIProvider::new(
+                        match praxis_providers::OpenAIProvider::new(
                             api_key,
                             provider_cfg.default_model.clone(),
                             Some(provider_cfg.base_url.clone()),
                             None,
                             None,
-                        ))
+                        ) {
+                            Ok(p) => std::sync::Arc::new(p),
+                            Err(e) => {
+                                tracing::warn!("Failed to init OpenAI provider '{}': {}. Using mock.", name, e.0);
+                                continue;
+                            }
+                        }
                     }
                     "anthropic" => {
-                        std::sync::Arc::new(praxis_providers::AnthropicProvider::new(
+                        match praxis_providers::AnthropicProvider::new(
                             api_key,
                             provider_cfg.default_model.clone(),
                             Some(provider_cfg.base_url.clone()),
                             None,
                             None,
-                        ))
+                        ) {
+                            Ok(p) => std::sync::Arc::new(p),
+                            Err(e) => {
+                                tracing::warn!("Failed to init Anthropic provider '{}': {}. Using mock.", name, e.0);
+                                continue;
+                            }
+                        }
                     }
                     "gemini" => {
-                        std::sync::Arc::new(praxis_providers::GeminiProvider::new(
+                        match praxis_providers::GeminiProvider::new(
                             api_key,
                             provider_cfg.default_model.clone(),
                             Some(provider_cfg.base_url.clone()),
                             None,
                             None,
-                        ))
+                        ) {
+                            Ok(p) => std::sync::Arc::new(p),
+                            Err(e) => {
+                                tracing::warn!("Failed to init Gemini provider '{}': {}. Using mock.", name, e.0);
+                                continue;
+                            }
+                        }
                     }
                     "ollama" => {
-                        std::sync::Arc::new(praxis_providers::OllamaProvider::new(
+                        match praxis_providers::OllamaProvider::new(
                             provider_cfg.default_model.clone(),
                             Some(provider_cfg.base_url.clone()),
-                        ))
+                        ) {
+                            Ok(p) => std::sync::Arc::new(p),
+                            Err(e) => {
+                                tracing::warn!("Failed to init Ollama provider '{}': {}. Using mock.", name, e.0);
+                                continue;
+                            }
+                        }
                     }
                     _ => {
-                        // Default to OpenAI-compatible provider
-                        std::sync::Arc::new(praxis_providers::OpenAIProvider::new(
+                        match praxis_providers::OpenAIProvider::new(
                             api_key,
                             provider_cfg.default_model.clone(),
                             Some(provider_cfg.base_url.clone()),
                             None,
                             None,
-                        ))
+                        ) {
+                            Ok(p) => std::sync::Arc::new(p),
+                            Err(e) => {
+                                tracing::warn!("Failed to init provider '{}': {}. Using mock.", name, e.0);
+                                continue;
+                            }
+                        }
                     }
                 };
 

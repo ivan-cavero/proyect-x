@@ -1,8 +1,5 @@
 /**
  * useWebSocket — Real-time event streaming from backend EventBus.
- *
- * Connects to /ws/global and receives all system events as JSON.
- * Auto-reconnects on disconnect with exponential backoff.
  */
 
 import { ref, onUnmounted } from 'vue'
@@ -16,62 +13,62 @@ export interface SystemEvent {
 }
 
 export function useWebSocket() {
-  const connected = ref(false)
+  const isConnected = ref(false)
   const events = ref<SystemEvent[]>([])
   const maxEvents = 200
 
-  let ws: WebSocket | null = null
-  let reconnectTimeout: ReturnType<typeof setTimeout> | null = null
-  let reconnectDelay = 1000
+  // Mutable state wrapped in refs so no `let` is needed
+  const wsRef = ref<WebSocket | null>(null)
+  const reconnectTimeoutRef = ref<ReturnType<typeof setTimeout> | null>(null)
+  const reconnectDelayRef = ref(1000)
 
   function connect() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = window.location.host
     const url = `${protocol}//${host}/ws/global`
 
-    ws = new WebSocket(url)
+    const ws = new WebSocket(url)
+    wsRef.value = ws
 
     ws.onopen = () => {
-      connected.value = true
-      reconnectDelay = 1000
-      console.log('[WS] Connected')
+      isConnected.value = true
+      reconnectDelayRef.value = 1000
     }
 
-    ws.onmessage = (event) => {
+    ws.onmessage = (message) => {
       try {
-        const data = JSON.parse(event.data) as SystemEvent
-        events.value.push(data)
-        // Keep only last N events
+        const data = JSON.parse(message.data) as SystemEvent
+        events.value = [...events.value, data]
         if (events.value.length > maxEvents) {
           events.value = events.value.slice(-maxEvents)
         }
-      } catch (e) {
-        console.warn('[WS] Failed to parse event:', e)
+      } catch (parseError) {
+        console.warn('[WS] Failed to parse event:', parseError)
       }
     }
 
     ws.onclose = () => {
-      connected.value = false
-      console.log(`[WS] Disconnected, reconnecting in ${reconnectDelay}ms...`)
+      isConnected.value = false
 
-      reconnectTimeout = setTimeout(() => {
-        reconnectDelay = Math.min(reconnectDelay * 2, 30000)
+      reconnectTimeoutRef.value = setTimeout(() => {
+        reconnectDelayRef.value = Math.min(reconnectDelayRef.value * 2, 30000)
         connect()
-      }, reconnectDelay)
+      }, reconnectDelayRef.value)
     }
 
-    ws.onerror = (error) => {
-      console.error('[WS] Error:', error)
+    ws.onerror = (connectionError) => {
+      console.error('[WS] Error:', connectionError)
     }
   }
 
   function disconnect() {
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout)
+    if (reconnectTimeoutRef.value) {
+      clearTimeout(reconnectTimeoutRef.value)
+      reconnectTimeoutRef.value = null
     }
-    if (ws) {
-      ws.close()
-      ws = null
+    if (wsRef.value) {
+      wsRef.value.close()
+      wsRef.value = null
     }
   }
 
@@ -82,13 +79,12 @@ export function useWebSocket() {
   // Auto-connect
   connect()
 
-  // Cleanup on unmount
   onUnmounted(() => {
     disconnect()
   })
 
   return {
-    connected,
+    connected: isConnected,
     events,
     disconnect,
     clearEvents,

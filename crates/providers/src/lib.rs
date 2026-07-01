@@ -28,3 +28,15 @@ pub use praxis_agent_traits::provider::{
 
 /// Result type for provider operations.
 pub type Result<T> = std::result::Result<T, praxis_shared::error::ProjectXError>;
+
+/// Errors from provider initialization.
+#[derive(Debug, Clone)]
+pub struct ProviderInitError(pub String);
+
+impl std::fmt::Display for ProviderInitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Provider init error: {}", self.0)
+    }
+}
+
+impl std::error::Error for ProviderInitError {}

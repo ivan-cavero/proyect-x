@@ -24,13 +24,13 @@ impl GeminiProvider {
         base_url: Option<String>,
         timeout: Option<std::time::Duration>,
         max_retries: Option<u32>,
-    ) -> Self {
+    ) -> Result<Self, crate::ProviderInitError> {
         let client = reqwest::Client::builder()
             .timeout(timeout.unwrap_or(std::time::Duration::from_secs(120)))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|error| crate::ProviderInitError(format!("Failed to build HTTP client: {error}")))?;
 
-        Self {
+        Ok(Self {
             client,
             base_url: base_url.unwrap_or_else(|| {
                 "https://generativelanguage.googleapis.com/v1beta/openai".to_string()
@@ -38,7 +38,7 @@ impl GeminiProvider {
             api_key,
             model,
             max_retries: max_retries.unwrap_or(3),
-        }
+        })
     }
 
     fn chat_url(&self) -> String {
@@ -51,7 +51,10 @@ impl GeminiProvider {
     ) -> Result<reqwest::Response, praxis_shared::error::ProjectXError> {
         let mut attempts = 0;
         loop {
-            let req = request.try_clone().expect("Request must be cloneable");
+            let req = request.try_clone()
+                .ok_or_else(|| praxis_shared::error::ProjectXError::Internal(
+                    "Request body exceeded maximum size for retry cloning".to_string()
+                ))?;
             match req.send().await {
                 Ok(resp) if resp.status().is_success() => return Ok(resp),
                 Ok(resp) if resp.status().as_u16() == 429 => {

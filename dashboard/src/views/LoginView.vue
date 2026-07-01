@@ -20,17 +20,17 @@ async function handleLogin() {
   error.value = ''
 
   try {
-    const res = await fetch('/api/health', {
+    const response = await fetch('/api/health', {
       headers: { 'Authorization': `Bearer ${token.value}` }
     })
 
-    if (res.ok) {
+    if (response.ok) {
       localStorage.setItem('praxis-token', token.value)
       emit('login', token.value)
     } else {
       error.value = 'Invalid token or server unavailable'
     }
-  } catch (e) {
+  } catch (fetchError) {
     localStorage.setItem('praxis-token', token.value)
     emit('login', token.value)
   } finally {

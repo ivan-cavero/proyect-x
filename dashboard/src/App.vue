@@ -81,7 +81,7 @@ async function handleCreateProject() {
     newProjectName.value = ''
     newProjectDesc.value = ''
     showCreateForm.value = false
-  } catch (e: any) { console.error(e) }
+  } catch (creationError: any) { console.error(creationError) }
 }
 
 async function handleDeleteProject(id: string) {
@@ -147,7 +147,7 @@ async function saveConfig() {
           <span class="header-title">{{ navItems.find(n => n.id === currentView)?.label }}</span>
         </div>
         <div class="header-right">
-          <span v-if="store.loading" class="status-indicator" style="color: var(--clr-amber)">SYNCING</span>
+          <span v-if="store.isLoading" class="status-indicator" style="color: var(--clr-amber)">SYNCING</span>
           <div class="status-indicator">
             <Icon :name="ws.connected.value ? 'wifi' : 'wifi-off'" :size="14"
               :color="ws.connected.value ? 'var(--clr-emerald)' : 'var(--clr-crimson)'" />

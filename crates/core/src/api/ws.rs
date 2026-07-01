@@ -11,7 +11,7 @@ use tokio::sync::broadcast;
 use super::routes::AppState;
 
 /// Client connection state
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Planned for client subscription filtering")]
 struct ClientState {
     sender: SplitSink<WebSocket, Message>,
     subscriptions: Vec<String>,
