@@ -3,7 +3,7 @@ defineProps<{
   title?: string
   subtitle?: string
   padding?: boolean
-  glow?: 'cyan' | 'amber' | 'crimson' | null
+  glow?: 'green' | 'amber' | 'crimson' | null
   hover?: boolean
 }>()
 </script>
@@ -20,7 +20,7 @@ defineProps<{
       v-if="glow"
       class="accent-line"
       :class="{
-        'accent-cyan': glow === 'cyan',
+        'accent-green': glow === 'green',
         'accent-amber': glow === 'amber',
         'accent-crimson': glow === 'crimson',
       }"

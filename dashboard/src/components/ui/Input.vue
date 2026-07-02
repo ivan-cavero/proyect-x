@@ -1,23 +1,21 @@
 <script setup lang="ts">
-defineProps<{
-  modelValue?: string
-  placeholder?: string
-  type?: string
-  label?: string
-}>()
+const model = defineModel<string>({ required: true })
 
-defineEmits(['update:modelValue'])
+withDefaults(defineProps<{
+  type?: string
+  placeholder?: string
+  disabled?: boolean
+}>(), {
+  type: 'text',
+})
 </script>
 
 <template>
-  <div class="input-group">
-    <label v-if="label" class="data-label">{{ label }}</label>
-    <input
-      :type="type || 'text'"
-      :value="modelValue"
-      @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)"
-      :placeholder="placeholder"
-      class="input"
-    />
-  </div>
+  <input
+    v-model="model"
+    :type="type"
+    :placeholder="placeholder"
+    :disabled="disabled"
+    class="input"
+  />
 </template>

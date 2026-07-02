@@ -1,11 +1,11 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { useApi } from '../composables/useApi'
-import Card from '../components/ui/Card.vue'
-import Button from '../components/ui/Button.vue'
-import Input from '../components/ui/Input.vue'
-import Badge from '../components/ui/Badge.vue'
 import Icon from '../components/ui/Icon.vue'
+
+const emit = defineEmits<{
+  back: []
+}>()
 
 const api = useApi()
 
@@ -15,9 +15,18 @@ interface ProviderKey {
   has_key: boolean
 }
 
+interface ModelInfo {
+  name: string
+  tokens: string
+  usage?: number
+  limit?: number
+}
+
 const providers = ref<ProviderKey[]>([])
 const loading = ref(false)
 const saving = ref<string | null>(null)
+const selectedProvider = ref<string | null>(null)
+const activeSettingsTab = ref('model-settings')
 
 // Form state
 const newProvider = ref('')
@@ -32,11 +41,33 @@ const knownProviders = [
   { name: 'gemini', label: 'Google Gemini', placeholder: 'AIza... or API key', desc: 'Gemini models' },
 ]
 
+// Models data
+const models = ref<ModelInfo[]>([
+  { name: 'GLM-5.2', tokens: '1M', usage: 3000000, limit: 3000000 },
+  { name: 'GLM-5-Turbo', tokens: '200K', usage: 2000000, limit: 2000000 },
+])
+
+const settingsNavItems = [
+  { id: 'general', label: 'General', icon: 'settings' },
+  { id: 'code-preview', label: 'Code preview', icon: 'code' },
+  { id: 'model-settings', label: 'Model settings', icon: 'server' },
+  { id: 'skills', label: 'Skills', icon: 'code' },
+  { id: 'subagents', label: 'Subagents', icon: 'robot' },
+  { id: 'mcp-servers', label: 'MCP Servers', icon: 'terminal' },
+  { id: 'plugins', label: 'Plugins', icon: 'plug' },
+  { id: 'commands', label: 'Commands', icon: 'command' },
+  { id: 'indexing', label: 'Indexing', icon: 'search' },
+  { id: 'usage', label: 'Usage', icon: 'chart' },
+]
+
 async function loadProviders() {
   loading.value = true
   try {
     const data = await api.get<{ providers: ProviderKey[] }>('/vault/keys')
     providers.value = data.providers || []
+    if (providers.value.length > 0 && !selectedProvider.value) {
+      selectedProvider.value = providers.value[0].provider
+    }
   } catch (e) {
     console.error('Failed to load providers:', e)
   } finally {
@@ -64,16 +95,6 @@ async function saveKey() {
   }
 }
 
-async function deleteKey(provider: string) {
-  if (!confirm(`Delete API key for "${provider}"?`)) return
-  try {
-    await api.del(`/vault/keys/${provider}`)
-    await loadProviders()
-  } catch (e) {
-    console.error('Failed to delete key:', e)
-  }
-}
-
 function selectKnownProvider(name: string) {
   newProvider.value = name
   if (!showInput.value) showInput.value = true
@@ -85,263 +106,896 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="settings-content">
-    <div class="max-w-3xl space-y-5 stagger">
+  <div class="settings-layout">
+    <!-- Settings Navigation -->
+    <nav class="settings-nav">
+      <button
+        class="settings-nav-item"
+        @click="emit('back')"
+      >
+        <Icon name="chevron-left" :size="16" class="nav-icon" />
+        <span>Back to workspace</span>
+      </button>
 
-      <!-- Header -->
-      <div class="flex items-center justify-between">
-        <h2 class="text-sm font-semibold tracking-wide mb-3">SETTINGS</h2>
-        <Button
-          v-if="!showInput"
-          @click="showInput = true"
-          variant="cyan"
-          size="sm"
-        >
-          <Icon name="plus" :size="14" />
-          Add Provider Key
-        </Button>
-      </div>
+      <div style="height: var(--space-4);" />
 
-      <!-- Add Key Form -->
-      <Card glow="cyan" v-if="showInput" class="anim-slide-up">
-        <div class="space-y-4">
-          <div>
-            <label class="data-label mb-1">PROVIDER</label>
-            <Input
-              v-model="newProvider"
-              placeholder="Provider name (e.g., nan, openai)"
-            />
-          </div>
+      <button
+        v-for="item in settingsNavItems"
+        :key="item.id"
+        class="settings-nav-item"
+        :class="{ active: activeSettingsTab === item.id }"
+        @click="activeSettingsTab = item.id"
+      >
+        <Icon :name="item.icon" :size="16" class="nav-icon" />
+        <span>{{ item.label }}</span>
+      </button>
 
-          <div>
-            <label class="data-label mb-1">API KEY</label>
-            <Input
-              v-model="newApiKey"
-              type="password"
-              placeholder="sk-xxx..."
-              @keyup.enter="saveKey"
-            />
-          </div>
+      <div style="flex: 1;" />
 
-          <div class="flex items-center gap-3 pt-2">
-            <Button
-              @click="saveKey"
-              variant="cyan"
-              size="sm"
-              :disabled="!newProvider || !newApiKey || saving !== null"
-            >
-              <Icon v-if="!saving" name="check" :size="14" />
-              <Icon v-else name="loader" :size="14" class="animate-spin" />
-              {{ saving ? 'Saving...' : 'Save Key' }}
-            </Button>
-            <Button @click="showInput = false" variant="ghost" size="sm">Cancel</Button>
-          </div>
-        </div>
-      </Card>
+      <!-- Onboard button -->
+      <button class="settings-nav-item onboard-btn">
+        <Icon name="robot" :size="16" class="nav-icon" />
+        <span>Onboard</span>
+      </button>
+    </nav>
 
-      <!-- Known Providers Reference -->
-      <Card title="KNOWN PROVIDERS" subtitle="click to auto-fill">
-        <div class="known-providers-grid">
-          <button
-            v-for="p in knownProviders"
-            :key="p.name"
-            @click="selectKnownProvider(p.name)"
-            class="known-provider-btn"
-          >
-            <Icon name="shield" :size="16" class="provider-icon" />
-            <div>
-              <div class="provider-label">{{ p.label }}</div>
-              <div class="provider-desc">{{ p.desc }}</div>
-            </div>
-          </button>
-        </div>
-      </Card>
-
-      <!-- Stored Keys -->
-      <Card title="STORED KEYS" :subtitle="`${providers.length} configured`">
-        <div v-if="loading" class="text-xs text-muted font-mono py-4 text-center">
-          Loading...
+    <!-- Settings Content -->
+    <div class="settings-content">
+      <!-- Model Settings View -->
+      <template v-if="activeSettingsTab === 'model-settings'">
+        <div class="settings-header">
+          <h1 class="settings-title">Model settings</h1>
+          <p class="settings-subtitle">Manage custom model providers. Once configured, they can be selected during chat.</p>
         </div>
 
-        <div v-else-if="providers.length === 0" class="text-xs text-muted font-mono py-8 text-center">
-          <Icon name="shield-off" :size="20" class="mx-auto mb-2 opacity-40" />
-          No provider keys stored. Add one above.
-        </div>
+        <div class="model-settings-grid">
+          <!-- Providers List -->
+          <div class="providers-panel">
+            <div class="panel-header">Providers</div>
+            
+            <div class="providers-list">
+              <div
+                v-for="provider in providers"
+                :key="provider.provider"
+                class="provider-card"
+                :class="{ active: selectedProvider === provider.provider }"
+                @click="selectedProvider = provider.provider"
+              >
+                <div class="provider-card-info">
+                  <div class="provider-status-dot" :class="provider.has_key ? 'enabled' : 'disabled'" />
+                  <span class="provider-card-name">{{ provider.provider }}</span>
+                </div>
+              </div>
 
-        <div v-else class="space-y-2">
-          <div
-            v-for="p in providers"
-            :key="p.provider"
-            class="provider-row"
-          >
-            <div class="flex items-center gap-3">
-              <Icon
-                :name="p.has_key ? 'shield-check' : 'shield-off'"
-                :size="16"
-                :color="p.has_key ? 'var(--clr-emerald)' : 'var(--clr-text-muted)'"
-              />
-              <div>
-                <div class="text-xs font-semibold text-primary capitalize">{{ p.provider }}</div>
-                <div class="font-10 font-mono text-muted">{{ p.key_masked || 'No key' }}</div>
+              <div
+                v-for="kp in knownProviders.filter(k => !providers.find(p => p.provider === k.name))"
+                :key="kp.name"
+                class="provider-card"
+                :class="{ active: selectedProvider === kp.name }"
+                @click="selectKnownProvider(kp.name)"
+              >
+                <div class="provider-card-info">
+                  <div class="provider-status-dot disabled" />
+                  <span class="provider-card-name">{{ kp.label }}</span>
+                </div>
               </div>
             </div>
-            <div class="flex items-center gap-2">
-              <Badge
-                :variant="p.has_key ? 'green' : 'gray'"
-                size="sm"
-              >
-                {{ p.has_key ? 'Configured' : 'Missing' }}
-              </Badge>
+
+            <div class="panel-section-title">Custom providers</div>
+            <button class="add-provider-btn" @click="showInput = true">
+              <Icon name="plus" :size="16" />
+              <span>Add provider</span>
+            </button>
+          </div>
+
+          <!-- Provider Details -->
+          <div class="provider-details" v-if="selectedProvider">
+            <!-- Provider Header -->
+            <div class="provider-detail-header">
+              <div class="provider-detail-title">
+                <span class="provider-detail-name">{{ selectedProvider }}</span>
+                <span class="badge badge-green">Enabled</span>
+              </div>
+              <div class="provider-detail-actions">
+                <span class="detail-label">Connection mode</span>
+                <select class="detail-select">
+                  <option>Coding Plan</option>
+                  <option>API Plan</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Plan Info -->
+            <div class="plan-card">
+              <div class="plan-header">
+                <div>
+                  <div class="plan-name">Start plan</div>
+                  <div class="plan-meta">Expires Jul 6</div>
+                </div>
+                <div class="plan-actions">
+                  <button class="plan-action">Manage</button>
+                  <button class="plan-action">Unlink</button>
+                  <button class="btn btn-sm btn-secondary">
+                    <Icon name="upload" :size="12" />
+                    Upgrade
+                  </button>
+                  <span class="badge badge-amber">150% Quota</span>
+                </div>
+              </div>
+
+              <!-- Today's Balance -->
+              <div class="quota-section">
+                <div class="quota-header">
+                  <span class="quota-title">Today's balance</span>
+                  <span class="quota-meta">Expires Jul 6</span>
+                </div>
+
+                <div class="quota-grid">
+                  <div v-for="model in models" :key="model.name" class="quota-card">
+                    <div class="quota-card-header">
+                      <span class="model-name">{{ model.name }}</span>
+                      <span class="quota-percentage">100%</span>
+                    </div>
+                    <div class="quota-time">17:59</div>
+                    <div class="progress-bar">
+                      <div class="progress-bar-fill" style="width: 100%;" />
+                    </div>
+                    <div class="quota-usage">
+                      {{ model.usage?.toLocaleString() }} / {{ model.limit?.toLocaleString() }}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Model List -->
+              <div class="model-list-section">
+                <div class="model-list-title">Model list</div>
+                <div class="model-list">
+                  <div v-for="model in models" :key="model.name" class="model-card">
+                    <span class="model-name">{{ model.name }}</span>
+                    <span class="model-tokens">{{ model.tokens }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add Provider Form Modal -->
+        <div v-if="showInput" class="modal-overlay" @click.self="showInput = false">
+          <div class="modal-card">
+            <div class="modal-header">
+              <h3 class="modal-title">Add Provider Key</h3>
+              <button class="modal-close" @click="showInput = false">
+                <Icon name="x" :size="18" />
+              </button>
+            </div>
+            
+            <div class="modal-body">
+              <div class="input-group">
+                <label class="input-label">PROVIDER</label>
+                <input
+                  v-model="newProvider"
+                  class="input"
+                  placeholder="Provider name (e.g., nan, openai)"
+                />
+              </div>
+
+              <div class="input-group">
+                <label class="input-label">API KEY</label>
+                <input
+                  v-model="newApiKey"
+                  type="password"
+                  class="input"
+                  placeholder="sk-xxx..."
+                  @keydown.enter="saveKey"
+                />
+              </div>
+            </div>
+
+            <div class="modal-footer">
+              <button class="btn btn-ghost" @click="showInput = false">Cancel</button>
               <button
-                @click="deleteKey(p.provider)"
-                class="btn-icon-danger"
-                title="Delete key"
+                class="btn btn-primary"
+                @click="saveKey"
+                :disabled="!newProvider || !newApiKey || saving !== null"
               >
-                <Icon name="trash" :size="14" />
+                <Icon v-if="!saving" name="check" :size="14" />
+                <Icon v-else name="refresh" :size="14" class="animate-spin" />
+                {{ saving ? 'Saving...' : 'Save Key' }}
               </button>
             </div>
           </div>
         </div>
-      </Card>
+      </template>
 
-      <!-- Security Notice -->
-      <Card glow="amber" class="anim-slide-up">
-        <div class="flex items-start gap-3">
-          <Icon name="shield-lock" :size="18" class="text-amber shrink-0 mt-0.5" />
-          <div>
-            <div class="text-xs font-semibold text-primary mb-1">Security</div>
-            <div class="font-10 text-muted leading-relaxed">
-              API keys are encrypted with AES-256-GCM and stored in
-              <code class="text-primary font-mono">.forge/credentials.vault.json</code>.
-              Keys are never logged or transmitted in plaintext. To enable encryption, set the
-              <code class="text-primary font-mono">VAULT_PASSWORD</code> environment variable before starting the server.
-            </div>
-          </div>
+      <!-- General Settings -->
+      <template v-else-if="activeSettingsTab === 'general'">
+        <div class="settings-header">
+          <h1 class="settings-title">General</h1>
+          <p class="settings-subtitle">Configure general application settings.</p>
         </div>
-      </Card>
+        <div class="settings-placeholder">
+          <Icon name="settings" :size="48" class="opacity-40" />
+          <p>General settings coming soon</p>
+        </div>
+      </template>
 
+      <!-- Code Preview Settings -->
+      <template v-else-if="activeSettingsTab === 'code-preview'">
+        <div class="settings-header">
+          <h1 class="settings-title">Code preview</h1>
+          <p class="settings-subtitle">Configure how code is displayed and highlighted.</p>
+        </div>
+        <div class="settings-placeholder">
+          <Icon name="code" :size="48" class="opacity-40" />
+          <p>Code preview settings coming soon</p>
+        </div>
+      </template>
+
+      <!-- Skills Settings -->
+      <template v-else-if="activeSettingsTab === 'skills'">
+        <div class="settings-header">
+          <h1 class="settings-title">Skills</h1>
+          <p class="settings-subtitle">Manage agent skills and capabilities.</p>
+        </div>
+        <div class="settings-placeholder">
+          <Icon name="code" :size="48" class="opacity-40" />
+          <p>Skills management coming soon</p>
+        </div>
+      </template>
+
+      <!-- Other settings views -->
+      <template v-else>
+        <div class="settings-header">
+          <h1 class="settings-title">{{ settingsNavItems.find(i => i.id === activeSettingsTab)?.label }}</h1>
+          <p class="settings-subtitle">This section is under development.</p>
+        </div>
+        <div class="settings-placeholder">
+          <Icon :name="settingsNavItems.find(i => i.id === activeSettingsTab)?.icon || 'settings'" :size="48" class="opacity-40" />
+          <p>Coming soon</p>
+        </div>
+      </template>
     </div>
   </div>
 </template>
 
 <style scoped>
-.settings-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-xl);
-}
-
-.max-w-3xl {
-  max-width: 720px;
-}
-
-.space-y-5 {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-}
-
-.space-y-4 {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-}
-
-.space-y-2 {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-}
-
-/* Known providers grid */
-.known-providers-grid {
+/* Settings Layout */
+.settings-layout {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--space-sm);
+  grid-template-columns: 200px 1fr;
+  gap: var(--space-8);
+  height: 100%;
+  padding: var(--space-6);
 }
 
-.known-provider-btn {
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.settings-nav-item {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
-  padding: var(--space-md);
-  border-radius: var(--radius);
-  border: 1px solid var(--clr-border-subtle);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: none;
   background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s var(--ease);
+  transition: all var(--transition-fast);
   text-align: left;
+  width: 100%;
+  font-family: inherit;
 }
 
-.known-provider-btn:hover {
-  border-color: var(--clr-primary);
-  background: var(--clr-primary-glow);
+.settings-nav-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
-.provider-icon {
-  opacity: 0.4;
-  transition: opacity 0.15s;
-  color: var(--clr-text-muted);
+.settings-nav-item.active {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 
-.known-provider-btn:hover .provider-icon {
+.onboard-btn {
+  border: 1px dashed var(--border-default);
+  margin-top: var(--space-4);
+}
+
+.onboard-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-muted);
+}
+
+.nav-icon {
+  opacity: 0.7;
+}
+
+.settings-nav-item:hover .nav-icon,
+.settings-nav-item.active .nav-icon {
   opacity: 1;
-  color: var(--clr-primary);
 }
 
-.provider-label {
-  font-size: 12px;
+.settings-content {
+  overflow-y: auto;
+  padding-right: var(--space-4);
+}
+
+.settings-header {
+  margin-bottom: var(--space-6);
+}
+
+.settings-title {
+  font-size: 24px;
   font-weight: 600;
-  color: var(--clr-text);
+  color: var(--text-primary);
+  margin-bottom: var(--space-2);
+  letter-spacing: -0.02em;
 }
 
-.provider-desc {
-  font-size: 10px;
-  font-family: var(--font-mono);
-  color: var(--clr-text-muted);
+.settings-subtitle {
+  font-size: 14px;
+  color: var(--text-muted);
 }
 
-/* Provider row */
-.provider-row {
+.settings-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-16);
+  text-align: center;
+  color: var(--text-muted);
+  gap: var(--space-4);
+}
+
+.model-settings-grid {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: var(--space-6);
+}
+
+/* Providers Panel */
+.providers-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.panel-header {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: var(--space-2) var(--space-3);
+}
+
+.panel-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: var(--space-2) var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.providers-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.provider-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-md);
-  border-radius: var(--radius);
-  border: 1px solid var(--clr-border-subtle);
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.provider-row:hover {
-  border-color: var(--clr-border);
-  background: rgba(255, 255, 255, 0.015);
-}
-
-.btn-icon-danger {
-  padding: 6px;
-  border-radius: 4px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
   background: transparent;
-  border: none;
-  color: var(--clr-text-muted);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all var(--transition-fast);
+}
+
+.provider-card:hover {
+  background: var(--bg-hover);
+}
+
+.provider-card.active {
+  background: var(--bg-elevated);
+}
+
+.provider-card-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.provider-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.provider-status-dot.enabled {
+  background: var(--primary);
+  box-shadow: 0 0 8px var(--primary-glow);
+}
+
+.provider-status-dot.disabled {
+  background: var(--text-disabled);
+}
+
+.provider-card-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.add-provider-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: 1px dashed var(--border-default);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  font-family: inherit;
+}
+
+.add-provider-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-muted);
+}
+
+/* Provider Details */
+.provider-details {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.provider-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.provider-detail-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.provider-detail-name {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
+}
+
+.provider-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.detail-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.detail-select {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.detail-select:hover {
+  border-color: var(--border-default);
+}
+
+.detail-select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+/* Plan Card */
+.plan-card {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  overflow: hidden;
+}
+
+.plan-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.plan-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--space-1);
+}
+
+.plan-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.plan-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.plan-action {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 0;
+  transition: color var(--transition-fast);
+}
+
+.plan-action:hover {
+  color: var(--text-primary);
+}
+
+/* Quota Section */
+.quota-section {
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.quota-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-5);
+}
+
+.quota-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.quota-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.quota-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-4);
+}
+
+.quota-card {
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+
+.quota-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.model-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.quota-percentage {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.quota-time {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: var(--space-3);
+}
+
+.progress-bar {
+  height: 4px;
+  background: var(--border-subtle);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  margin-bottom: var(--space-3);
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: var(--radius-full);
+  transition: width var(--transition-slow);
+}
+
+.quota-usage {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+/* Model List */
+.model-list-section {
+  padding: var(--space-5);
+}
+
+.model-list-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: var(--space-4);
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  transition: border-color var(--transition-fast);
+}
+
+.model-card:hover {
+  border-color: var(--border-default);
+}
+
+.model-tokens {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(4px);
+}
+
+.modal-card {
+  width: 420px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+}
+
+.modal-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.modal-body {
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.input-label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.input {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  font-size: 14px;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  transition: all var(--transition-fast);
+}
+
+.input:hover {
+  border-color: var(--border-default);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-muted);
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+.btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+  line-height: 1.4;
 }
 
-.btn-icon-danger:hover {
-  color: var(--clr-crimson);
-  background: var(--clr-crimson-glow);
+.btn:active {
+  transform: scale(0.98);
 }
 
-.mb-3 { margin-bottom: var(--space-md); }
-.mb-2 { margin-bottom: var(--space-sm); }
-.mb-1 { margin-bottom: var(--space-xs); }
-.mx-auto { margin-left: auto; margin-right: auto; }
-.text-center { text-align: center; }
-.py-4 { padding-top: var(--space-md); padding-bottom: var(--space-md); }
-.py-8 { padding-top: var(--space-xl); padding-bottom: var(--space-xl); }
-.shrink-0 { flex-shrink: 0; }
-.ml-auto { margin-left: auto; }
-.text-amber { color: var(--clr-amber); }
+.btn-primary {
+  background: var(--primary);
+  color: var(--bg-base);
+  border: none;
+}
+
+.btn-primary:hover {
+  background: var(--primary-hover);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-secondary {
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
+
+.btn-secondary:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border-color: transparent;
+}
+
+.btn-ghost:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.btn-sm {
+  padding: var(--space-1) var(--space-3);
+  font-size: 12px;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.badge-green {
+  background: var(--primary-muted);
+  color: var(--primary);
+}
+
+.badge-amber {
+  background: rgba(234, 179, 8, 0.15);
+  color: var(--warning);
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.opacity-40 {
+  opacity: 0.4;
+}
 </style>

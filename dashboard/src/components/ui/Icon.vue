@@ -34,6 +34,16 @@ import {
   IconUpload,
   IconSend,
   IconMessage,
+  IconFolder,
+  IconFolderFilled,
+  IconChartBar,
+  IconKeyboard,
+  IconPlug,
+  IconCommand,
+  IconDatabase,
+  IconChartLine,
+  IconDeviceMobile,
+  IconMenu2,
   type Icon,
 } from '@tabler/icons-vue'
 
@@ -48,6 +58,7 @@ const iconMap: Record<string, Icon> = {
   login: IconLogin,
   wifi: IconWifi,
   'wifi-off': IconWifiOff,
+  circle: IconCircleDot,
   dot: IconCircleDot,
   alert: IconAlertTriangle,
   check: IconCheck,
@@ -63,6 +74,9 @@ const iconMap: Record<string, Icon> = {
   clock: IconClock,
   token: IconTent,
   shield: IconShield,
+  shieldCheck: IconShield,
+  shieldOff: IconShield,
+  shieldLock: IconShield,
   code: IconCode,
   list: IconList,
   eye: IconEye,
@@ -72,6 +86,18 @@ const iconMap: Record<string, Icon> = {
   upload: IconUpload,
   send: IconSend,
   message: IconMessage,
+  folder: IconFolder,
+  'folder-filled': IconFolderFilled,
+  chart: IconChartBar,
+  'chart-line': IconChartLine,
+  keyboard: IconKeyboard,
+  plug: IconPlug,
+  plugin: IconPlug,
+  command: IconCommand,
+  database: IconDatabase,
+  phone: IconDeviceMobile,
+  mobile: IconDeviceMobile,
+  menu: IconMenu2,
 }
 
 const props = defineProps<{
@@ -86,10 +112,12 @@ const icon = iconMap[props.name]
 
 <template>
   <component
+    v-if="icon"
     :is="icon"
     :size="size || 18"
     :stroke="stroke || '1.5'"
     :color="color"
     class="inline-block shrink-0"
   />
+  <span v-else :style="{ width: `${size || 18}px`, height: `${size || 18}px` }" />
 </template>

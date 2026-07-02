@@ -1,8 +1,7 @@
 <script setup lang="ts">
-const props = withDefaults(defineProps<{
-  variant?: 'cyan' | 'green' | 'amber' | 'red' | 'gray'
+withDefaults(defineProps<{
+  variant?: 'green' | 'amber' | 'crimson' | 'gray' | 'emerald'
   size?: 'sm' | 'md'
-  pulse?: boolean
 }>(), {
   variant: 'gray',
   size: 'md',
@@ -13,22 +12,21 @@ const props = withDefaults(defineProps<{
   <span
     class="badge"
     :class="{
-      'badge-cyan': variant === 'cyan',
-      'badge-emerald': variant === 'green',
+      'badge-green': variant === 'green',
+      'badge-emerald': variant === 'emerald',
       'badge-amber': variant === 'amber',
-      'badge-crimson': variant === 'red',
+      'badge-crimson': variant === 'crimson',
       'badge-gray': variant === 'gray',
+      'badge-sm': size === 'sm',
     }"
   >
-    <span
-      v-if="pulse"
-      class="pulse-dot"
-      :class="{
-        'pulse-cyan': variant === 'cyan',
-        'pulse-emerald': variant === 'green',
-        'pulse-amber': variant === 'amber',
-      }"
-    />
     <slot />
   </span>
 </template>
+
+<style scoped>
+.badge-sm {
+  padding: 2px 6px;
+  font-size: 10px;
+}
+</style>

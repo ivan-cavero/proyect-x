@@ -41,7 +41,6 @@ async function handleLogin() {
 
 <template>
   <div class="login-screen">
-
     <!-- Background Grid -->
     <div class="grid-bg" />
 
@@ -52,7 +51,7 @@ async function handleLogin() {
     <div class="login-card">
       <!-- Logo -->
       <div class="text-center mb-8">
-        <div class="logo-symbol">X</div>
+        <div class="logo-symbol">P</div>
         <h1 class="login-title">praxis</h1>
         <p class="login-subtitle">Neural Command Center</p>
       </div>
@@ -60,7 +59,7 @@ async function handleLogin() {
       <!-- Form -->
       <div class="login-form">
         <div>
-          <label class="data-label block mb-1">Access Token</label>
+          <label class="input-label block mb-1">Access Token</label>
           <div class="input-with-icon">
             <input
               v-model="token"
@@ -83,7 +82,7 @@ async function handleLogin() {
         <button
           @click="handleLogin"
           :disabled="isLoading || !token.trim()"
-          class="btn btn-primary"
+          class="btn btn-primary btn-block"
         >
           <Icon v-if="!isLoading" name="login" :size="14" />
           <span v-if="isLoading" class="loading-spinner" />

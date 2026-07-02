@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const props = withDefaults(defineProps<{
-  variant?: 'cyan' | 'ghost' | 'danger'
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger'
   size?: 'sm' | 'md' | 'lg'
   disabled?: boolean
   block?: boolean
@@ -15,9 +15,10 @@ const props = withDefaults(defineProps<{
   <button
     class="btn"
     :class="{
-      'btn-primary': variant === 'cyan',
+      'btn-primary': variant === 'primary',
+      'btn-secondary': variant === 'secondary',
       'btn-danger': variant === 'danger',
-      'btn-secondary': variant === 'ghost',
+      'btn-ghost': variant === 'ghost',
       'btn-sm': size === 'sm',
       'btn-block': block,
     }"
