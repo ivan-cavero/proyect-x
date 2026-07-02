@@ -33,23 +33,23 @@ mod integration_tests {
         let tester = Tester::new(test_role("tester", "gpt-5"));
 
         let task = Task::new("architect", "claude-4-opus", "design a REST API");
-        let adr = architect.execute(&task);
+        let adr = architect.execute(&task).await;
         assert_eq!(adr.status, crate::orchestrator::task::TaskStatus::Completed);
 
         let task = Task::new("coder", "gpt-5", "implement the API");
-        let code = coder.execute(&task);
+        let code = coder.execute(&task).await;
         assert_eq!(code.status, crate::orchestrator::task::TaskStatus::Completed);
 
         let task = Task::new("reviewer", "gemini-2.5-pro", "review the code");
-        let review = reviewer.execute(&task);
+        let review = reviewer.execute(&task).await;
         assert_eq!(review.status, crate::orchestrator::task::TaskStatus::Completed);
 
         let task = Task::new("security", "claude-4-haiku", "scan for vulnerabilities");
-        let security_result = security.execute(&task);
+        let security_result = security.execute(&task).await;
         assert_eq!(security_result.status, crate::orchestrator::task::TaskStatus::Completed);
 
         let task = Task::new("tester", "gpt-5", "write tests");
-        let test_result = tester.execute(&task);
+        let test_result = tester.execute(&task).await;
         assert_eq!(test_result.status, crate::orchestrator::task::TaskStatus::Completed);
     }
 

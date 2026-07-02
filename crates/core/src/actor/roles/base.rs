@@ -5,75 +5,94 @@
 
 use crate::orchestrator::roles::ResolvedRole;
 use crate::orchestrator::task::{Task, TaskResult};
+use async_trait::async_trait;
 use praxis_agent_traits::provider::{ChatConfig, ChatMessage, ChatRole, LLMProvider};
 use std::sync::Arc;
 
 // ─── Helpers ──────────────────────────────────────────────────
 
 fn build_chat_messages(task: &Task, system_prompt: &str) -> Vec<ChatMessage> {
-    let mut messages = Vec::new();
+    let mut messages = Vec::with_capacity(3);
     if !system_prompt.is_empty() {
-        messages.push(ChatMessage { role: ChatRole::System, content: system_prompt.to_string(), tool_calls: None, tool_call_id: None });
+        messages.push(ChatMessage {
+            role: ChatRole::System,
+            content: system_prompt.to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
     }
     if !task.context.is_empty() {
-        messages.push(ChatMessage { role: ChatRole::User, content: format!("Context:\n{}", task.context), tool_calls: None, tool_call_id: None });
+        messages.push(ChatMessage {
+            role: ChatRole::User,
+            content: format!("Context:\n{}", task.context),
+            tool_calls: None,
+            tool_call_id: None,
+        });
     }
-    messages.push(ChatMessage { role: ChatRole::User, content: task.description.clone(), tool_calls: None, tool_call_id: None });
+    messages.push(ChatMessage {
+        role: ChatRole::User,
+        content: task.description.clone(),
+        tool_calls: None,
+        tool_call_id: None,
+    });
     messages
 }
 
 fn build_chat_config(role: &ResolvedRole) -> ChatConfig {
-    ChatConfig { model: role.model.clone(), temperature: role.temperature, max_tokens: role.max_tokens, top_p: None, stop_sequences: None, presence_penalty: None, frequency_penalty: None }
+    ChatConfig {
+        model: role.model.clone(),
+        temperature: role.temperature,
+        max_tokens: role.max_tokens,
+        top_p: None,
+        stop_sequences: None,
+        presence_penalty: None,
+        frequency_penalty: None,
+    }
 }
 
-async fn call_llm_or_mock(provider: &Option<Arc<dyn LLMProvider>>, task: &Task, system_prompt: &str, mock_output: &str) -> String {
+/// Call the LLM provider if available, otherwise return mock output.
+async fn call_llm_or_mock(
+    provider: &Option<Arc<dyn LLMProvider>>,
+    task: &Task,
+    system_prompt: &str,
+    role: &ResolvedRole,
+    mock_output: &str,
+) -> String {
     match provider {
         Some(llm) => {
             let messages = build_chat_messages(task, system_prompt);
-            let config = build_chat_config(&ResolvedRole {
-                role_name: String::new(), model: llm.model_info().name.clone(),
-                temperature: 0.3, max_tokens: 4096, system_prompt: String::new(),
-                tools: Vec::new(), context_profile: "balanced".to_string(),
-            });
+            let config = build_chat_config(role);
             match llm.chat(&messages, &config).await {
                 Ok(response) => response.content,
-                Err(e) => { tracing::warn!("LLM call failed, using mock: {}", e); mock_output.to_string() }
+                Err(e) => {
+                    tracing::warn!("LLM call failed for '{}', using mock: {}", role.role_name, e);
+                    mock_output.to_string()
+                }
             }
         }
         None => mock_output.to_string(),
     }
 }
 
-/// Call LLM synchronously using block_on. Panics if called inside a tokio runtime.
-fn call_llm_sync(provider: &Option<Arc<dyn LLMProvider>>, task: &Task, system_prompt: &str, mock_output: &str) -> String {
-    // Check if we're already in a tokio runtime
-    if tokio::runtime::Handle::try_current().is_ok() {
-        // We're in a runtime — can't block_on. Return mock.
-        tracing::debug!("In tokio runtime, using mock output for agent");
-        return mock_output.to_string();
-    }
-    let rt = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(error) => {
-            tracing::error!("Failed to create tokio runtime: {error}");
-            return "mock output (no runtime)".to_string();
-        }
-    };
-    rt.block_on(call_llm_or_mock(provider, task, system_prompt, mock_output))
-}
-
-fn make_task_result(task: &Task, agent_id: &str, role: &str, content: &str, start: std::time::Instant) -> TaskResult {
+fn make_task_result(
+    task: &Task,
+    agent_id: &str,
+    role: &str,
+    content: &str,
+    start: std::time::Instant,
+) -> TaskResult {
     TaskResult::success(&task.id, agent_id, role, content, start.elapsed().as_millis() as u64)
 }
 
 // ─── BaseAgent Trait ──────────────────────────────────────────
 
+#[async_trait]
 pub trait BaseAgent: Send + Sync {
     fn role(&self) -> &ResolvedRole;
     fn asi_score(&self) -> f32;
     fn context_pressure(&self) -> f32;
-    fn execute(&self, task: &Task) -> TaskResult;
-    fn handle_feedback(&self, task: &Task, feedback: &str) -> TaskResult;
+    async fn execute(&self, task: &Task) -> TaskResult;
+    async fn handle_feedback(&self, task: &Task, feedback: &str) -> TaskResult;
     fn reset_context(&mut self);
 }
 
@@ -87,25 +106,39 @@ pub struct Architect {
 }
 
 impl Architect {
-    pub fn new(role: ResolvedRole) -> Self { Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0 } }
-    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self { Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0 } }
+    pub fn new(role: ResolvedRole) -> Self {
+        Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0 }
+    }
+    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self {
+        Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0 }
+    }
 }
 
+#[async_trait]
 impl BaseAgent for Architect {
     fn role(&self) -> &ResolvedRole { &self.role }
     fn asi_score(&self) -> f32 { self.asi_score }
     fn context_pressure(&self) -> f32 { self.context_pressure }
-    fn execute(&self, task: &Task) -> TaskResult {
+
+    async fn execute(&self, task: &Task) -> TaskResult {
         let start = std::time::Instant::now();
         let prompt = "You are a senior software architect. Generate an Architecture Decision Record (ADR) for the given task. Include: title, status, context, decision, consequences, and alternatives considered.";
-        let content = call_llm_sync(&self.provider, task, prompt, &format!(
+        let mock = format!(
             "ADR: {}\nStatus: accepted\nContext: The team needs to: {}\nDecision: Implement using the proposed approach\nConsequences: [+Clear architecture, -Upfront design time]",
             task.description, task.description
-        ));
+        );
+        let content = call_llm_or_mock(&self.provider, task, prompt, &self.role, &mock).await;
         make_task_result(task, "architect", "architect", &content, start)
     }
-    fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult { self.execute(task) }
-    fn reset_context(&mut self) { self.asi_score = 100.0; self.context_pressure = 0.0; }
+
+    async fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult {
+        self.execute(task).await
+    }
+
+    fn reset_context(&mut self) {
+        self.asi_score = 100.0;
+        self.context_pressure = 0.0;
+    }
 }
 
 // ─── Coder ────────────────────────────────────────────────────
@@ -119,24 +152,49 @@ pub struct Coder {
 }
 
 impl Coder {
-    pub fn new(role: ResolvedRole) -> Self { Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0, compilation_errors: Vec::new() } }
-    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self { Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0, compilation_errors: Vec::new() } }
+    pub fn new(role: ResolvedRole) -> Self {
+        Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0, compilation_errors: Vec::new() }
+    }
+    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self {
+        Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0, compilation_errors: Vec::new() }
+    }
 }
 
+#[async_trait]
 impl BaseAgent for Coder {
     fn role(&self) -> &ResolvedRole { &self.role }
     fn asi_score(&self) -> f32 { self.asi_score }
     fn context_pressure(&self) -> f32 { self.context_pressure }
-    fn execute(&self, task: &Task) -> TaskResult {
+
+    async fn execute(&self, task: &Task) -> TaskResult {
         let start = std::time::Instant::now();
         let prompt = "You are an expert Rust engineer. Write production-quality code for the given task. Output only the code, no explanation. Use idiomatic Rust patterns.";
-        let content = call_llm_sync(&self.provider, task, prompt, &format!(
-            "// Generated code for: {}\nfn main() {{ println!(\"Hello, world!\"); }}", task.description
-        ));
+        let mock = format!(
+            "// Generated code for: {}\nfn main() {{ println!(\"Hello, world!\"); }}",
+            task.description
+        );
+        let content = call_llm_or_mock(&self.provider, task, prompt, &self.role, &mock).await;
         make_task_result(task, "coder", "coder", &content, start)
     }
-    fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult { self.execute(task) }
-    fn reset_context(&mut self) { self.asi_score = 100.0; self.context_pressure = 0.0; self.compilation_errors.clear(); }
+
+    async fn handle_feedback(&self, task: &Task, feedback: &str) -> TaskResult {
+        let start = std::time::Instant::now();
+        let prompt = "You are an expert Rust engineer. Fix the code based on the reviewer feedback. Output only the corrected code.";
+        let mut task_with_feedback = task.clone();
+        task_with_feedback.context = format!("{}\n\nReviewer feedback:\n{}", task.context, feedback);
+        let mock = format!(
+            "// Fixed code for: {}\n// Applied feedback: {}",
+            task.description, feedback
+        );
+        let content = call_llm_or_mock(&self.provider, &task_with_feedback, prompt, &self.role, &mock).await;
+        make_task_result(task, "coder", "coder", &content, start)
+    }
+
+    fn reset_context(&mut self) {
+        self.asi_score = 100.0;
+        self.context_pressure = 0.0;
+        self.compilation_errors.clear();
+    }
 }
 
 // ─── Reviewer ─────────────────────────────────────────────────
@@ -149,24 +207,36 @@ pub struct Reviewer {
 }
 
 impl Reviewer {
-    pub fn new(role: ResolvedRole) -> Self { Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0 } }
-    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self { Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0 } }
+    pub fn new(role: ResolvedRole) -> Self {
+        Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0 }
+    }
+    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self {
+        Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0 }
+    }
 }
 
+#[async_trait]
 impl BaseAgent for Reviewer {
     fn role(&self) -> &ResolvedRole { &self.role }
     fn asi_score(&self) -> f32 { self.asi_score }
     fn context_pressure(&self) -> f32 { self.context_pressure }
-    fn execute(&self, task: &Task) -> TaskResult {
+
+    async fn execute(&self, task: &Task) -> TaskResult {
         let start = std::time::Instant::now();
         let prompt = "You are a senior code reviewer. Analyze the given code/task critically. Report: pass/fail, issues found (severity, file, line, message), and suggestions for improvement. Be specific.";
-        let content = call_llm_sync(&self.provider, task, prompt,
-            "Review: PASS\nSummary: Code looks good with minor suggestions\nIssues: 0 critical, 0 major, 1 nit"
-        );
+        let mock = "Review: PASS\nSummary: Code looks good with minor suggestions\nIssues: 0 critical, 0 major, 1 nit";
+        let content = call_llm_or_mock(&self.provider, task, prompt, &self.role, mock).await;
         make_task_result(task, "reviewer", "reviewer", &content, start)
     }
-    fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult { self.execute(task) }
-    fn reset_context(&mut self) { self.asi_score = 100.0; self.context_pressure = 0.0; }
+
+    async fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult {
+        self.execute(task).await
+    }
+
+    fn reset_context(&mut self) {
+        self.asi_score = 100.0;
+        self.context_pressure = 0.0;
+    }
 }
 
 // ─── Security ─────────────────────────────────────────────────
@@ -179,24 +249,36 @@ pub struct Security {
 }
 
 impl Security {
-    pub fn new(role: ResolvedRole) -> Self { Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0 } }
-    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self { Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0 } }
+    pub fn new(role: ResolvedRole) -> Self {
+        Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0 }
+    }
+    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self {
+        Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0 }
+    }
 }
 
+#[async_trait]
 impl BaseAgent for Security {
     fn role(&self) -> &ResolvedRole { &self.role }
     fn asi_score(&self) -> f32 { self.asi_score }
     fn context_pressure(&self) -> f32 { self.context_pressure }
-    fn execute(&self, task: &Task) -> TaskResult {
+
+    async fn execute(&self, task: &Task) -> TaskResult {
         let start = std::time::Instant::now();
         let prompt = "You are a security auditor. Scan the given code for: hardcoded secrets, SQL injection, XSS, unsafe operations, insecure dependencies, and other vulnerabilities. Report findings with severity levels.";
-        let content = call_llm_sync(&self.provider, task, prompt,
-            "Security Scan: PASS\nFindings: 0 critical, 0 high, 0 medium\nSummary: No security issues detected"
-        );
+        let mock = "Security Scan: PASS\nFindings: 0 critical, 0 high, 0 medium\nSummary: No security issues detected";
+        let content = call_llm_or_mock(&self.provider, task, prompt, &self.role, mock).await;
         make_task_result(task, "security", "security", &content, start)
     }
-    fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult { self.execute(task) }
-    fn reset_context(&mut self) { self.asi_score = 100.0; self.context_pressure = 0.0; }
+
+    async fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult {
+        self.execute(task).await
+    }
+
+    fn reset_context(&mut self) {
+        self.asi_score = 100.0;
+        self.context_pressure = 0.0;
+    }
 }
 
 // ─── Tester ───────────────────────────────────────────────────
@@ -211,24 +293,38 @@ pub struct Tester {
 }
 
 impl Tester {
-    pub fn new(role: ResolvedRole) -> Self { Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0, tests_generated: 0, tests_passed: 0 } }
-    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self { Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0, tests_generated: 0, tests_passed: 0 } }
+    pub fn new(role: ResolvedRole) -> Self {
+        Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0, tests_generated: 0, tests_passed: 0 }
+    }
+    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self {
+        Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0, tests_generated: 0, tests_passed: 0 }
+    }
 }
 
+#[async_trait]
 impl BaseAgent for Tester {
     fn role(&self) -> &ResolvedRole { &self.role }
     fn asi_score(&self) -> f32 { self.asi_score }
     fn context_pressure(&self) -> f32 { self.context_pressure }
-    fn execute(&self, task: &Task) -> TaskResult {
+
+    async fn execute(&self, task: &Task) -> TaskResult {
         let start = std::time::Instant::now();
         let prompt = "You are a QA engineer. Generate comprehensive tests for the given task. Include: unit tests, edge cases, error cases. Use the project's test framework. Output test code only.";
-        let content = call_llm_sync(&self.provider, task, prompt,
-            &format!("// Tests for: {}\n#[test]\nfn test_basic() {{ assert!(true); }}", task.description)
-        );
+        let mock = format!("// Tests for: {}\n#[test]\nfn test_basic() {{ assert!(true); }}", task.description);
+        let content = call_llm_or_mock(&self.provider, task, prompt, &self.role, &mock).await;
         make_task_result(task, "tester", "tester", &content, start)
     }
-    fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult { self.execute(task) }
-    fn reset_context(&mut self) { self.asi_score = 100.0; self.context_pressure = 0.0; self.tests_generated = 0; self.tests_passed = 0; }
+
+    async fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult {
+        self.execute(task).await
+    }
+
+    fn reset_context(&mut self) {
+        self.asi_score = 100.0;
+        self.context_pressure = 0.0;
+        self.tests_generated = 0;
+        self.tests_passed = 0;
+    }
 }
 
 // ─── Git ──────────────────────────────────────────────────────
@@ -241,15 +337,21 @@ pub struct Git {
 }
 
 impl Git {
-    pub fn new(role: ResolvedRole) -> Self { Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0 } }
-    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self { Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0 } }
+    pub fn new(role: ResolvedRole) -> Self {
+        Self { role, provider: None, asi_score: 100.0, context_pressure: 0.0 }
+    }
+    pub fn with_provider(role: ResolvedRole, provider: Arc<dyn LLMProvider>) -> Self {
+        Self { role, provider: Some(provider), asi_score: 100.0, context_pressure: 0.0 }
+    }
     pub fn create_branch(&self, session_id: &str) -> serde_json::Value {
         serde_json::json!({ "action": "branch_created", "branch": format!("feature/session-{}", session_id), "status": "ok" })
     }
     pub fn commit(&self, task: &Task) -> serde_json::Value {
         serde_json::json!({ "action": "committed", "message": format!("feat: {}", task.description), "files_changed": 3, "insertions": 45, "deletions": 12, "status": "ok" })
     }
-    pub fn generate_commit_message(&self, task: &Task) -> String { format!("feat: {}", task.description) }
+    pub fn generate_commit_message(&self, task: &Task) -> String {
+        format!("feat: {}", task.description)
+    }
     pub fn status(&self) -> serde_json::Value {
         serde_json::json!({ "clean": true, "branch": "main", "ahead": 0, "behind": 0, "modified": 0, "untracked": 0 })
     }
@@ -258,20 +360,28 @@ impl Git {
     }
 }
 
+#[async_trait]
 impl BaseAgent for Git {
     fn role(&self) -> &ResolvedRole { &self.role }
     fn asi_score(&self) -> f32 { self.asi_score }
     fn context_pressure(&self) -> f32 { self.context_pressure }
-    fn execute(&self, task: &Task) -> TaskResult {
+
+    async fn execute(&self, task: &Task) -> TaskResult {
         let start = std::time::Instant::now();
         let prompt = "You are a Git expert. Generate a conventional commit message for the given task. Format: type(scope): description. Types: feat, fix, refactor, docs, test, chore.";
-        let content = call_llm_sync(&self.provider, task, prompt,
-            &self.generate_commit_message(task)
-        );
+        let mock = &self.generate_commit_message(task);
+        let content = call_llm_or_mock(&self.provider, task, prompt, &self.role, mock).await;
         make_task_result(task, "git", "git", &content, start)
     }
-    fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult { self.execute(task) }
-    fn reset_context(&mut self) { self.asi_score = 100.0; self.context_pressure = 0.0; }
+
+    async fn handle_feedback(&self, task: &Task, _feedback: &str) -> TaskResult {
+        self.execute(task).await
+    }
+
+    fn reset_context(&mut self) {
+        self.asi_score = 100.0;
+        self.context_pressure = 0.0;
+    }
 }
 
 // ─── Factory ──────────────────────────────────────────────────
@@ -310,59 +420,72 @@ mod tests {
 
     fn test_role(name: &str) -> ResolvedRole {
         ResolvedRole {
-            role_name: name.to_string(), model: "gpt-4o".to_string(), temperature: 0.3,
-            max_tokens: 4096, system_prompt: format!("You are a {}", name),
-            tools: vec!["filesystem".to_string()], context_profile: "balanced".to_string(),
+            role_name: name.to_string(),
+            model: "gpt-4o".to_string(),
+            temperature: 0.3,
+            max_tokens: 4096,
+            system_prompt: format!("You are a {}", name),
+            tools: vec!["filesystem".to_string()],
+            context_profile: "balanced".to_string(),
         }
     }
 
-    #[test]
-    fn test_architect_execute() {
+    #[tokio::test]
+    async fn test_architect_execute() {
         let agent = Architect::new(test_role("architect"));
         let task = Task::new("architect", "gpt-4o", "design a REST API");
-        let result = agent.execute(&task);
+        let result = agent.execute(&task).await;
         assert_eq!(result.status, crate::orchestrator::task::TaskStatus::Completed);
         assert!(!result.content.is_empty());
     }
 
-    #[test]
-    fn test_coder_execute() {
+    #[tokio::test]
+    async fn test_coder_execute() {
         let agent = Coder::new(test_role("coder"));
         let task = Task::new("coder", "gpt-4o", "write hello world");
-        let result = agent.execute(&task);
+        let result = agent.execute(&task).await;
         assert_eq!(result.status, crate::orchestrator::task::TaskStatus::Completed);
         assert!(!result.content.is_empty());
     }
 
-    #[test]
-    fn test_reviewer_execute() {
+    #[tokio::test]
+    async fn test_coder_handle_feedback() {
+        let agent = Coder::new(test_role("coder"));
+        let task = Task::new("coder", "gpt-4o", "write hello world");
+        let result = agent.handle_feedback(&task, "use println! instead of eprintln!").await;
+        assert_eq!(result.status, crate::orchestrator::task::TaskStatus::Completed);
+        assert!(!result.content.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_reviewer_execute() {
         let agent = Reviewer::new(test_role("reviewer"));
         let task = Task::new("reviewer", "gpt-4o", "review code");
-        let result = agent.execute(&task);
+        let result = agent.execute(&task).await;
         assert_eq!(result.status, crate::orchestrator::task::TaskStatus::Completed);
     }
 
-    #[test]
-    fn test_security_execute() {
+    #[tokio::test]
+    async fn test_security_execute() {
         let agent = Security::new(test_role("security"));
         let task = Task::new("security", "gpt-4o", "scan for vulnerabilities");
-        let result = agent.execute(&task);
+        let result = agent.execute(&task).await;
         assert_eq!(result.status, crate::orchestrator::task::TaskStatus::Completed);
     }
 
-    #[test]
-    fn test_tester_execute() {
-        let mut agent = Tester::new(test_role("tester"));
+    #[tokio::test]
+    async fn test_tester_execute() {
+        let agent = Tester::new(test_role("tester"));
         let task = Task::new("tester", "gpt-4o", "write tests");
-        let result = agent.execute(&task);
+        let result = agent.execute(&task).await;
         assert_eq!(result.status, crate::orchestrator::task::TaskStatus::Completed);
     }
 
-    #[test]
-    fn test_git_execute() {
+    #[tokio::test]
+    async fn test_git_execute() {
         let agent = Git::new(test_role("git"));
         let task = Task::new("git", "gpt-4o", "commit changes");
-        let result = agent.execute(&task);
+        let result = agent.execute(&task).await;
         assert_eq!(result.status, crate::orchestrator::task::TaskStatus::Completed);
     }
 

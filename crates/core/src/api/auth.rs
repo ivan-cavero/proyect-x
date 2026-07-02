@@ -24,8 +24,6 @@ pub struct Claims {
     pub iat: u64,
     /// Expiration (Unix timestamp).
     pub exp: u64,
-    /// Organization ID (for multi-tenant).
-    pub org_id: Option<String>,
     /// User role.
     pub role: String,
 }
@@ -98,7 +96,6 @@ impl AuthState {
         &self,
         user_id: &str,
         role: &str,
-        org_id: Option<&str>,
     ) -> Result<String, AuthError> {
         let now = chrono::Utc::now().timestamp() as u64;
 
@@ -106,7 +103,6 @@ impl AuthState {
             sub: user_id.to_string(),
             iat: now,
             exp: now + self.token_expiry_secs,
-            org_id: org_id.map(|s| s.to_string()),
             role: role.to_string(),
         };
 
@@ -201,7 +197,7 @@ pub async fn auth_middleware(
 
 /// Generate a first-run admin token (for local-only usage).
 pub fn generate_first_run_token(auth: &AuthState) -> Result<String, AuthError> {
-    auth.generate_token("admin", "admin", None)
+    auth.generate_token("admin", "admin")
 }
 
 #[cfg(test)]
@@ -211,19 +207,18 @@ mod tests {
     #[test]
     fn test_token_roundtrip() {
         let auth = AuthState::new(b"test-secret-key-at-least-32-bytes-long!");
-        let token = auth.generate_token("user1", "developer", Some("org-1")).unwrap();
+        let token = auth.generate_token("user1", "developer").unwrap();
         let claims = auth.validate_token(&token).unwrap();
 
         assert_eq!(claims.sub, "user1");
         assert_eq!(claims.role, "developer");
-        assert_eq!(claims.org_id, Some("org-1".to_string()));
     }
 
     #[test]
     fn test_token_expiry() {
         // Test that tokens have exp claim set correctly
         let auth = AuthState::with_expiry(b"test-secret-key-at-least-32-bytes-long!", 3600);
-        let token = auth.generate_token("user1", "admin", None).unwrap();
+        let token = auth.generate_token("user1", "admin").unwrap();
         let claims = auth.validate_token(&token).unwrap();
 
         // exp should be ~3600 seconds in the future
@@ -237,7 +232,7 @@ mod tests {
         let auth1 = AuthState::new(b"secret-key-number-one-32-bytes-long!!!!");
         let auth2 = AuthState::new(b"secret-key-number-two-32-bytes-long!!!!");
 
-        let token = auth1.generate_token("user1", "admin", None).unwrap();
+        let token = auth1.generate_token("user1", "admin").unwrap();
         let result = auth2.validate_token(&token);
         assert!(result.is_err(), "Should fail with wrong key: {:?}", result);
     }
@@ -257,7 +252,6 @@ mod tests {
             sub: "alice".to_string(),
             iat: 1000,
             exp: 2000,
-            org_id: None,
             role: "developer".to_string(),
         };
         assert_eq!(format!("{}", claims), "user=alice, role=developer");

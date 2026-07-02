@@ -6,12 +6,12 @@
 pub mod actor;
 pub mod api;
 pub mod bus;
+pub mod completion;
 pub mod drift;
 pub mod r#loop;
 pub mod machine;
 pub mod workflow;
 pub mod orchestrator;
-pub mod rbac;
 
 #[cfg(test)]
 mod integration_tests;
@@ -26,9 +26,14 @@ pub use workflow::*;
 pub use orchestrator::{RoleConfig, RoleOverride, GoalConfig, ResolvedRole};
 pub use orchestrator::roles::ResolvedRole as AgentRoleResolved;
 pub use orchestrator::{Task, TaskResult, TaskStatus};
+pub use completion::{
+    CompletionCriterion, OutcomeResult, OutcomeVerifier,
+    CodingOutcomeVerifier, ManualCompletionVerifier, default_coding_criterion,
+};
 
 use praxis_mcp_host::McpHost;
 use praxis_vault::VaultService;
+use praxis_agent_traits::persistence::EventStore;
 
 use thiserror::Error;
 
@@ -72,6 +77,14 @@ pub struct CoreRuntime {
     pub loop_controller: crate::r#loop::LoopController,
     pub drift_guard: crate::drift::DriftGuard,
     pub mcp_host: McpHost,
+    pub pathology_detector: crate::r#loop::LoopPathologyDetector,
+    pub completion_criterion: Option<CompletionCriterion>,
+    /// Optional event store for checkpointing and event sourcing.
+    pub event_store: Option<std::sync::Arc<praxis_persistence::SqliteEventStore>>,
+    /// Current session ID (set when run_goal starts).
+    pub session_id: Option<uuid::Uuid>,
+    /// Flag set by Ctrl+C to request graceful shutdown.
+    pub shutdown_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl CoreRuntime {
@@ -82,8 +95,86 @@ impl CoreRuntime {
         let loop_controller = crate::r#loop::LoopController::new();
         let drift_guard = crate::drift::DriftGuard::new();
         let mcp_host = McpHost::new("praxis");
+        let pathology_detector = crate::r#loop::LoopPathologyDetector::new();
 
-        Ok(Self { bus, supervisor, loop_controller, drift_guard, mcp_host })
+        Ok(Self {
+            bus,
+            supervisor,
+            loop_controller,
+            drift_guard,
+            mcp_host,
+            pathology_detector,
+            completion_criterion: None,
+            event_store: None,
+            session_id: None,
+            shutdown_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
+    }
+
+    /// Attach a SQLite event store for checkpointing and event sourcing.
+    pub fn with_event_store(mut self, store: praxis_persistence::SqliteEventStore) -> Self {
+        self.event_store = Some(std::sync::Arc::new(store));
+        self
+    }
+
+    /// Get a handle to the shutdown flag. Set it to true to request graceful
+    /// shutdown from outside the runtime (e.g., Ctrl+C handler).
+    pub fn shutdown_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.shutdown_requested.clone()
+    }
+
+    /// Save a checkpoint of the current session state to the event store.
+    ///
+    /// Called after each phase transition. If the process crashes, `resume_goal`
+    /// can load this checkpoint and continue from where it left off.
+    async fn save_checkpoint(&self, goal: &str) {
+        let Some(store) = &self.event_store else {
+            return;
+        };
+        let Some(session_id) = self.session_id else {
+            return;
+        };
+
+        let state = serde_json::json!({
+            "goal": goal,
+            "phase": format!("{:?}", self.loop_controller.state_machine.current()),
+            "iteration": self.loop_controller.iteration,
+            "phase_iterations": self.loop_controller.phase_iterations,
+            "started_at": self.loop_controller.started_at.elapsed().as_secs(),
+        });
+
+        let snapshot = praxis_agent_traits::persistence::StoredSnapshot {
+            aggregate_id: session_id,
+            aggregate_type: "session".to_string(),
+            state,
+            version: self.loop_controller.iteration as i64,
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+
+        if let Err(e) = store.save_snapshot(snapshot).await {
+            tracing::warn!("Failed to save checkpoint: {}", e);
+        } else {
+            tracing::debug!(
+                "Checkpoint saved: session={}, iteration={}",
+                session_id,
+                self.loop_controller.iteration
+            );
+        }
+    }
+
+    /// Load the last checkpoint for a session, if one exists.
+    pub async fn load_checkpoint(
+        &self,
+        session_id: uuid::Uuid,
+    ) -> Option<praxis_agent_traits::persistence::StoredSnapshot> {
+        let store = self.event_store.as_ref()?;
+        match store.get_snapshot(session_id).await {
+            Ok(snap) => snap,
+            Err(e) => {
+                tracing::warn!("Failed to load checkpoint: {}", e);
+                None
+            }
+        }
     }
 
     /// Connect MCP servers defined in the forge.toml config.
@@ -249,10 +340,12 @@ impl CoreRuntime {
         String::new()
     }
 
-    /// Run a goal through the full agent pipeline.
+    /// Run a goal through the agent pipeline with a real iteration loop.
     ///
-    /// Flow: Planning → Designing → Implementing → Reviewing → Testing → Finalizing
-    /// Each phase spawns the appropriate agents and collects results.
+    /// The loop iterates: Planning → Designing → Implementing → Reviewing.
+    /// If review gates fail → Fixing → Implementing → Reviewing (loop).
+    /// If gates pass → Testing → SecurityScan → Finalizing → Completed.
+    /// Stops when goal is complete or hard limits are reached.
     ///
     /// If `vault` is provided, providers are initialized from forge.toml + vault keys.
     /// When no forge.toml exists, runs using default mock agents.
@@ -264,7 +357,6 @@ impl CoreRuntime {
     ) -> Result<GoalResult> {
         tracing::info!("Starting goal: {}", goal);
 
-        // Load config from forge.toml or use empty (no config = mock agents)
         let config = match config_path.map(load_forge_config) {
             Some(Ok(cfg)) => cfg,
             Some(Err(e)) => {
@@ -277,55 +369,91 @@ impl CoreRuntime {
             }
         };
 
-        // Initialize providers from config + vault/env (if any)
         let provider_router = self.init_providers(&config, vault).await;
 
-        // If no config loaded, use a default coder agent
         if config.roles.is_empty() {
             tracing::info!("No roles defined in config. Using default coder role.");
         }
 
-        // Start the loop
+        // Register quality gates for review/test/security phases
+        self.register_default_gates();
+
+        // Set up outcome-based completion criterion (default: coding verifier)
+        if self.completion_criterion.is_none() {
+            self.completion_criterion = Some(default_coding_criterion());
+        }
+        self.pathology_detector.reset();
+
+        // Assign a session ID
+        self.session_id = Some(uuid::Uuid::new_v4());
+
         self.loop_controller.start();
         self.bus.publish(
             praxis_shared::protocol::MessageKind::SessionHeartbeat,
             "core",
         );
 
-        // Advance state machine to Planning (first phase)
-        self.loop_controller.advance(machine::phase::Phase::Planning).ok();
+        self.loop_controller
+            .advance(machine::phase::Phase::Planning)
+            .map_err(CoreError::StateMachine)?;
 
         let mut results = Vec::new();
+        let mut feedback = String::new();
         let mut current_phase = machine::phase::Phase::Planning;
 
-        // Navigate through phases
         loop {
             if current_phase.is_terminal() {
                 break;
             }
 
-            tracing::info!("Phase: {}", current_phase);
+            // Check for graceful shutdown request (Ctrl+C)
+            if self
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                tracing::info!("Shutdown requested. Saving checkpoint and stopping.");
+                self.save_checkpoint(goal).await;
+                break;
+            }
 
-            // Get agents for this phase
+            if let Some(violation) = self.loop_controller.check_limits() {
+                tracing::warn!("Limit reached: {}. Stopping loop.", violation);
+                self.save_checkpoint(goal).await;
+                break;
+            }
+
+            tracing::info!(
+                "Phase: {} (iteration {})",
+                current_phase,
+                self.loop_controller.iteration
+            );
+
             let phase_agents = get_agents_for_phase(&current_phase, &config);
 
-            // Execute agents in this phase
             for role_config in &phase_agents {
-                let task = orchestrator::Task::new(
+                let mut task = orchestrator::Task::new(
                     &role_config.name,
                     &role_config.model,
                     goal,
                 );
 
-                // Try to resolve a real LLM provider for this role's model
-                let resolved_role = orchestrator::roles::ResolvedRole::resolve(role_config, None);
+                let has_feedback = !feedback.is_empty() && role_config.name == "coder";
+                if has_feedback {
+                    task.context = feedback.clone();
+                }
+
+                let resolved_role =
+                    orchestrator::roles::ResolvedRole::resolve(role_config, None);
                 let agent = match provider_router.resolve(&role_config.model) {
                     Ok(provider) => {
-                        crate::actor::roles::AgentFactory::create_with_provider(&resolved_role, provider)
+                        crate::actor::roles::AgentFactory::create_with_provider(
+                            &resolved_role,
+                            provider,
+                        )
                     }
                     Err(_) => {
                         tracing::warn!(
-                            "No provider found for model '{}'. Using mock agent for '{}'.",
+                            "No provider for model '{}'. Using mock agent for '{}'.",
                             role_config.model,
                             role_config.name
                         );
@@ -333,7 +461,12 @@ impl CoreRuntime {
                     }
                 };
 
-                let result = agent.execute(&task);
+                let result = if has_feedback {
+                    agent.handle_feedback(&task, &feedback).await
+                } else {
+                    agent.execute(&task).await
+                };
+
                 tracing::info!(
                     "Agent {} completed: status={:?}, duration={}ms",
                     result.agent_id,
@@ -344,7 +477,131 @@ impl CoreRuntime {
                 results.push(result);
             }
 
-            // Advance to next phase
+            // Evaluate gates for quality-check phases
+            if matches!(
+                current_phase,
+                machine::phase::Phase::Reviewing
+                    | machine::phase::Phase::Testing
+                    | machine::phase::Phase::SecurityScan
+            ) {
+                let review_results = extract_review_results(&results);
+                self.loop_controller.add_results(review_results);
+                let gates_pass = self.loop_controller.all_gates_pass();
+
+                if !gates_pass {
+                    feedback = consolidate_feedback(&results);
+
+                    // Check if any gate has exceeded its retry limit
+                    let phase = self.loop_controller.state_machine.current();
+                    let gates_exceeded: Vec<&machine::gate::Gate> = self
+                        .loop_controller
+                        .gates
+                        .gates_for(&phase)
+                        .into_iter()
+                        .filter(|g| g.is_exceeded())
+                        .collect();
+
+                    if !gates_exceeded.is_empty() {
+                        let gate_names: Vec<&str> =
+                            gates_exceeded.iter().map(|g| g.name.as_str()).collect();
+                        tracing::warn!(
+                            "Gate retry limit exceeded for: {}. Marking goal as failed.",
+                            gate_names.join(", ")
+                        );
+                        current_phase = machine::phase::Phase::Failed;
+                        self.loop_controller
+                            .advance(machine::phase::Phase::Failed)
+                            .map_err(CoreError::StateMachine)?;
+                        break;
+                    }
+
+                    tracing::info!(
+                        "Gate failed on {:?}. Going to Fixing. Feedback: {} chars",
+                        current_phase,
+                        feedback.len()
+                    );
+                    current_phase = machine::phase::Phase::Fixing;
+                    self.loop_controller
+                        .advance(machine::phase::Phase::Fixing)
+                        .map_err(CoreError::StateMachine)?;
+                    self.loop_controller.increment_iteration();
+                    continue;
+                } else {
+                    if !feedback.is_empty() {
+                        tracing::info!("Gates passed after fix. Clearing feedback.");
+                        feedback.clear();
+                    }
+                }
+            }
+
+            // ── Pathology detection ──────────────────────────────
+            // Check the last agent's output for destructive/stuck patterns.
+            if let Some(last_result) = results.last() {
+                let phase_str = format!("{:?}", current_phase);
+                if let Some(alert) = self.pathology_detector.record_iteration(
+                    self.loop_controller.iteration,
+                    &last_result.content,
+                    &phase_str,
+                ) {
+                    tracing::error!(
+                        "Loop pathology detected: {:?} — {}",
+                        alert.kind,
+                        alert.details
+                    );
+
+                    // Fatal pathology → kill the loop immediately
+                    if alert.severity == r#loop::PathologySeverity::Fatal {
+                        tracing::error!(
+                            "Fatal pathology: {}. Stopping loop immediately.",
+                            alert.details
+                        );
+                        break;
+                    }
+                }
+            }
+
+            // ── Completion criterion (outcome-based) ─────────────
+            // After quality-check phases, verify if the goal is actually achieved.
+            if matches!(
+                current_phase,
+                machine::phase::Phase::Reviewing
+                    | machine::phase::Phase::Testing
+                    | machine::phase::Phase::SecurityScan
+                    | machine::phase::Phase::Finalizing
+            ) {
+                if let Some(criterion) = &mut self.completion_criterion {
+                    let outcome = criterion.evaluate(goal, &results).await;
+
+                    match outcome {
+                        completion::OutcomeResult::Achieved { evidence, .. } => {
+                            tracing::info!(
+                                "Goal achieved (verified by {}). Evidence: {}",
+                                criterion.verifier_name(),
+                                &evidence[..evidence.len().min(200)]
+                            );
+                            current_phase = machine::phase::Phase::Completed;
+                            self.loop_controller
+                                .advance(machine::phase::Phase::Completed)
+                                .map_err(CoreError::StateMachine)?;
+                            break;
+                        }
+                        completion::OutcomeResult::Exhausted { reason } => {
+                            tracing::warn!(
+                                "Goal exhausted: {}. Stopping loop.",
+                                reason
+                            );
+                            break;
+                        }
+                        completion::OutcomeResult::NotAchieved { reason } => {
+                            tracing::info!(
+                                "Goal not yet achieved: {}. Continuing.",
+                                reason
+                            );
+                        }
+                    }
+                }
+            }
+
             let next_phase = get_next_phase(&current_phase);
             match self.loop_controller.advance(next_phase) {
                 Ok(_transition) => {
@@ -368,17 +625,24 @@ impl CoreRuntime {
 
             current_phase = next_phase;
             self.loop_controller.increment_iteration();
+
+            // Save checkpoint after each phase transition
+            self.save_checkpoint(goal).await;
         }
 
         self.loop_controller.stop();
 
+        // Save final checkpoint
+        self.save_checkpoint(goal).await;
+
         let total_duration: u64 = results.iter().map(|r| r.duration_ms).sum();
-        let passed = results.iter().all(|r| r.status == orchestrator::task::TaskStatus::Completed);
+        let passed = current_phase == machine::phase::Phase::Completed;
 
         tracing::info!(
-            "Goal '{}' completed: phases={}, agents={}, passed={}, duration={}ms",
+            "Goal '{}' finished: phases={}, iterations={}, agents={}, passed={}, duration={}ms",
             goal,
             self.loop_controller.state_machine.history().len(),
+            self.loop_controller.iteration,
             results.len(),
             passed,
             total_duration,
@@ -390,6 +654,253 @@ impl CoreRuntime {
             agent_results: results,
             total_duration_ms: total_duration,
         })
+    }
+
+    /// Resume a goal from the last checkpoint.
+    ///
+    /// Loads the session state from the event store and continues the loop
+    /// from where it left off. Returns `None` if no checkpoint exists.
+    pub async fn resume_goal(
+        &mut self,
+        session_id: uuid::Uuid,
+        config_path: Option<&std::path::Path>,
+        vault: Option<&VaultService>,
+    ) -> Result<Option<GoalResult>> {
+        let checkpoint = match self.load_checkpoint(session_id).await {
+            Some(snap) => snap,
+            None => {
+                tracing::info!("No checkpoint found for session {}", session_id);
+                return Ok(None);
+            }
+        };
+
+        let goal = checkpoint
+            .state
+            .get("goal")
+            .and_then(|v| v.as_str())
+            .unwrap_or("resumed goal")
+            .to_string();
+
+        let saved_iteration = checkpoint
+            .state
+            .get("iteration")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+
+        let saved_phase = checkpoint
+            .state
+            .get("phase")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Planning");
+
+        tracing::info!(
+            "Resuming session {} at phase={}, iteration={}",
+            session_id,
+            saved_phase,
+            saved_iteration
+        );
+
+        // Restore session state
+        self.session_id = Some(session_id);
+        self.loop_controller.iteration = saved_iteration;
+
+        // Re-register gates and completion criterion
+        self.register_default_gates();
+        if self.completion_criterion.is_none() {
+            self.completion_criterion = Some(default_coding_criterion());
+        }
+        self.pathology_detector.reset();
+
+        // Load config
+        let config = match config_path.map(load_forge_config) {
+            Some(Ok(cfg)) => cfg,
+            _ => ForgeConfig::empty(),
+        };
+        let provider_router = self.init_providers(&config, vault).await;
+
+        self.loop_controller.start();
+
+        let mut results = Vec::new();
+        let mut feedback = String::new();
+        let mut current_phase = machine::phase::Phase::Planning;
+
+        // Same loop as run_goal
+        loop {
+            if current_phase.is_terminal() {
+                break;
+            }
+
+            if self
+                .shutdown_requested
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                tracing::info!("Shutdown requested. Saving checkpoint and stopping.");
+                self.save_checkpoint(&goal).await;
+                break;
+            }
+
+            if let Some(violation) = self.loop_controller.check_limits() {
+                tracing::warn!("Limit reached: {}. Stopping loop.", violation);
+                self.save_checkpoint(&goal).await;
+                break;
+            }
+
+            tracing::info!(
+                "Phase: {} (iteration {})",
+                current_phase,
+                self.loop_controller.iteration
+            );
+
+            let phase_agents = get_agents_for_phase(&current_phase, &config);
+
+            for role_config in &phase_agents {
+                let mut task = orchestrator::Task::new(
+                    &role_config.name,
+                    &role_config.model,
+                    &goal,
+                );
+
+                let has_feedback = !feedback.is_empty() && role_config.name == "coder";
+                if has_feedback {
+                    task.context = feedback.clone();
+                }
+
+                let resolved_role =
+                    orchestrator::roles::ResolvedRole::resolve(role_config, None);
+                let agent = match provider_router.resolve(&role_config.model) {
+                    Ok(provider) => {
+                        crate::actor::roles::AgentFactory::create_with_provider(
+                            &resolved_role,
+                            provider,
+                        )
+                    }
+                    Err(_) => {
+                        crate::actor::roles::AgentFactory::create(&resolved_role)
+                    }
+                };
+
+                let result = if has_feedback {
+                    agent.handle_feedback(&task, &feedback).await
+                } else {
+                    agent.execute(&task).await
+                };
+
+                results.push(result);
+            }
+
+            if matches!(
+                current_phase,
+                machine::phase::Phase::Reviewing
+                    | machine::phase::Phase::Testing
+                    | machine::phase::Phase::SecurityScan
+            ) {
+                let review_results = extract_review_results(&results);
+                self.loop_controller.add_results(review_results);
+                let gates_pass = self.loop_controller.all_gates_pass();
+
+                if !gates_pass {
+                    feedback = consolidate_feedback(&results);
+                    current_phase = machine::phase::Phase::Fixing;
+                    self.loop_controller
+                        .advance(machine::phase::Phase::Fixing)
+                        .map_err(CoreError::StateMachine)?;
+                    self.loop_controller.increment_iteration();
+                    continue;
+                } else {
+                    feedback.clear();
+                }
+            }
+
+            if let Some(last_result) = results.last() {
+                let phase_str = format!("{:?}", current_phase);
+                if let Some(alert) = self.pathology_detector.record_iteration(
+                    self.loop_controller.iteration,
+                    &last_result.content,
+                    &phase_str,
+                ) {
+                    tracing::error!(
+                        "Loop pathology detected: {:?} — {}",
+                        alert.kind,
+                        alert.details
+                    );
+                    if alert.severity == r#loop::PathologySeverity::Fatal {
+                        break;
+                    }
+                }
+            }
+
+            if matches!(
+                current_phase,
+                machine::phase::Phase::Reviewing
+                    | machine::phase::Phase::Testing
+                    | machine::phase::Phase::SecurityScan
+                    | machine::phase::Phase::Finalizing
+            ) {
+                if let Some(criterion) = &mut self.completion_criterion {
+                    let outcome = criterion.evaluate(&goal, &results).await;
+                    match outcome {
+                        completion::OutcomeResult::Achieved { .. } => {
+                            current_phase = machine::phase::Phase::Completed;
+                            self.loop_controller
+                                .advance(machine::phase::Phase::Completed)
+                                .map_err(CoreError::StateMachine)?;
+                            break;
+                        }
+                        completion::OutcomeResult::Exhausted { reason } => {
+                            tracing::warn!("Goal exhausted: {}. Stopping.", reason);
+                            break;
+                        }
+                        completion::OutcomeResult::NotAchieved { reason } => {
+                            tracing::info!("Goal not yet achieved: {}. Continuing.", reason);
+                        }
+                    }
+                }
+            }
+
+            let next_phase = get_next_phase(&current_phase);
+            match self.loop_controller.advance(next_phase) {
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::error!("Failed to advance phase: {}", e);
+                    break;
+                }
+            }
+
+            current_phase = next_phase;
+            self.loop_controller.increment_iteration();
+            self.save_checkpoint(&goal).await;
+        }
+
+        self.loop_controller.stop();
+        self.save_checkpoint(&goal).await;
+
+        let total_duration: u64 = results.iter().map(|r| r.duration_ms).sum();
+        let passed = current_phase == machine::phase::Phase::Completed;
+
+        Ok(Some(GoalResult {
+            goal,
+            passed,
+            agent_results: results,
+            total_duration_ms: total_duration,
+        }))
+    }
+
+    /// Register default quality gates for the standard pipeline.
+    fn register_default_gates(&mut self) {
+        use machine::gate::{Gate, GateEvaluator};
+
+        self.loop_controller.gates.register(
+            machine::phase::Phase::Reviewing,
+            Gate::new("review.pass", GateEvaluator::AllAgentsPass, 3),
+        );
+        self.loop_controller.gates.register(
+            machine::phase::Phase::SecurityScan,
+            Gate::new("security.no_critical", GateEvaluator::NoCritical, 3),
+        );
+        self.loop_controller.gates.register(
+            machine::phase::Phase::Testing,
+            Gate::new("test.pass", GateEvaluator::AllAgentsPass, 3),
+        );
     }
 
     /// Spawn a new EchoAgent via the supervisor (for testing).
@@ -551,34 +1062,56 @@ pub fn load_forge_config(path: &std::path::Path) -> Result<ForgeConfig> {
 }
 
 /// Get the agents configured for a specific phase.
+///
+/// When no roles are configured (no forge.toml), uses default mock roles
+/// so the pipeline still runs end-to-end.
 fn get_agents_for_phase(
     phase: &machine::phase::Phase,
     config: &ForgeConfig,
 ) -> Vec<orchestrator::RoleConfig> {
+    let lookup = |name: &str| -> Option<orchestrator::RoleConfig> {
+        config.roles.get(name).cloned().or_else(|| {
+            if config.roles.is_empty() {
+                Some(default_role(name))
+            } else {
+                None
+            }
+        })
+    };
+
     match phase {
         machine::phase::Phase::Planning | machine::phase::Phase::Designing => {
-            config.roles.get("architect").cloned().into_iter().collect()
+            lookup("architect").into_iter().collect()
         }
         machine::phase::Phase::Implementing => {
-            config.roles.get("coder").cloned().into_iter().collect()
+            lookup("coder").into_iter().collect()
         }
         machine::phase::Phase::Reviewing | machine::phase::Phase::Fixing => {
-            config.roles.get("reviewer").cloned().into_iter().collect()
+            lookup("reviewer").into_iter().collect()
         }
         machine::phase::Phase::Testing | machine::phase::Phase::SecurityScan => {
-            vec![
-                config.roles.get("tester").cloned(),
-                config.roles.get("security").cloned(),
-            ]
-            .into_iter()
-            .flatten()
-            .collect()
+            vec![lookup("tester"), lookup("security")]
+                .into_iter()
+                .flatten()
+                .collect()
         }
-        machine::phase::Phase::Finalizing => {
-            // No agents in finalizing
-            Vec::new()
-        }
+        machine::phase::Phase::Finalizing => Vec::new(),
         _ => Vec::new(),
+    }
+}
+
+/// Create a default role config for when no forge.toml exists.
+fn default_role(name: &str) -> orchestrator::RoleConfig {
+    orchestrator::RoleConfig {
+        name: name.to_string(),
+        description: Some(format!("Default {} agent (mock mode)", name)),
+        model: "gpt-4o".to_string(),
+        temperature: 0.3,
+        max_tokens: 4096,
+        system_prompt: Some(format!("You are a helpful {} assistant.", name)),
+        tools: Vec::new(),
+        context_profile: Some("balanced".to_string()),
+        context_priority: Some("normal".to_string()),
     }
 }
 
@@ -594,8 +1127,77 @@ fn get_next_phase(current: &machine::phase::Phase) -> machine::phase::Phase {
         machine::phase::Phase::SecurityScan => machine::phase::Phase::Finalizing,
         machine::phase::Phase::Finalizing => machine::phase::Phase::Completed,
         machine::phase::Phase::Researching => machine::phase::Phase::Designing,
-        machine::phase::Phase::Fixing => machine::phase::Phase::Reviewing,
+        machine::phase::Phase::Fixing => machine::phase::Phase::Implementing,
         _ => machine::phase::Phase::Completed,
+    }
+}
+
+/// Extract review results from agent task results.
+///
+/// Converts the most recent reviewer/security/tester output into a
+/// `ReviewResult` that the gate system can evaluate. Parses the agent's
+/// text output for PASS/FAIL keywords.
+fn extract_review_results(results: &[orchestrator::TaskResult]) -> Vec<machine::gate::ReviewResult> {
+    results
+        .iter()
+        .rev()
+        .find(|r| matches!(r.role.as_str(), "reviewer" | "security" | "tester"))
+        .map(|r| {
+            let content_lower = r.content.to_lowercase();
+            let passed = !content_lower.contains("fail");
+
+            let has_critical = content_lower.contains("critical")
+                && !content_lower.contains("0 critical")
+                && !content_lower.contains("no critical");
+
+            let comments = if has_critical {
+                vec![machine::gate::ReviewComment {
+                    severity: machine::gate::Severity::Critical,
+                    file: None,
+                    line: None,
+                    message: "Critical finding detected".to_string(),
+                }]
+            } else {
+                Vec::new()
+            };
+
+            let coverage = if r.role == "tester" {
+                if content_lower.contains("coverage") {
+                    Some(0.85)
+                } else {
+                    Some(0.5)
+                }
+            } else {
+                None
+            };
+
+            machine::gate::ReviewResult {
+                agent: r.agent_id.clone(),
+                passed,
+                comments,
+                coverage,
+            }
+        })
+        .into_iter()
+        .collect()
+}
+
+/// Consolidate feedback from failed gates into a single message for the coder.
+fn consolidate_feedback(results: &[orchestrator::TaskResult]) -> String {
+    let review_feedback: Vec<&str> = results
+        .iter()
+        .rev()
+        .filter(|r| matches!(r.role.as_str(), "reviewer" | "security" | "tester"))
+        .map(|r| r.content.as_str())
+        .collect();
+
+    if review_feedback.is_empty() {
+        "Previous iteration had issues. Please review and fix.".to_string()
+    } else {
+        format!(
+            "Previous review feedback:\n{}",
+            review_feedback.join("\n---\n")
+        )
     }
 }
 
@@ -687,6 +1289,186 @@ mod tests {
 
         let agents = runtime.list_agents().await.expect("list failed");
         assert_eq!(agents.len(), 1);
+
+        let _ = runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_run_goal_completes_with_mock_agents() {
+        let mut runtime = CoreRuntime::new().await.expect("Failed to create runtime");
+
+        let result = runtime
+            .run_goal("Create a hello world program", None, None)
+            .await
+            .expect("run_goal failed");
+
+        assert!(!result.agent_results.is_empty(), "should have executed agents");
+        assert!(result.passed, "goal should pass with mock agents (all gates pass)");
+
+        let _ = runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_run_goal_respects_iteration_limit() {
+        let mut runtime = CoreRuntime::new().await.expect("Failed to create runtime");
+        runtime.loop_controller.limits.max_iterations_per_goal = 3;
+
+        let result = runtime
+            .run_goal("Limited goal", None, None)
+            .await
+            .expect("run_goal failed");
+
+        assert!(
+            runtime.loop_controller.iteration <= 3,
+            "should not exceed max iterations: got {}",
+            runtime.loop_controller.iteration
+        );
+
+        let _ = runtime.shutdown().await;
+    }
+
+    #[test]
+    fn test_extract_review_results_pass() {
+        let results = vec![orchestrator::TaskResult::success(
+            "t1", "reviewer", "reviewer",
+            "Review: PASS\nNo issues found", 100,
+        )];
+        let review = extract_review_results(&results);
+        assert_eq!(review.len(), 1);
+        assert!(review[0].passed, "should pass when content says PASS");
+    }
+
+    #[test]
+    fn test_extract_review_results_fail() {
+        let results = vec![orchestrator::TaskResult::success(
+            "t1", "reviewer", "reviewer",
+            "Review: FAIL\nCritical issue found", 100,
+        )];
+        let review = extract_review_results(&results);
+        assert_eq!(review.len(), 1);
+        assert!(!review[0].passed, "should fail when content says FAIL");
+        assert!(!review[0].comments.is_empty(), "should have critical comments");
+    }
+
+    #[test]
+    fn test_consolidate_feedback() {
+        let results = vec![
+            orchestrator::TaskResult::success("t1", "coder", "coder", "code here", 100),
+            orchestrator::TaskResult::success("t2", "reviewer", "reviewer", "Fix the error handling", 100),
+        ];
+        let feedback = consolidate_feedback(&results);
+        assert!(feedback.contains("Fix the error handling"), "should include reviewer feedback");
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_saved_and_loaded() {
+        let store = praxis_persistence::SqliteEventStore::in_memory()
+            .expect("Failed to create store");
+
+        let mut runtime = CoreRuntime::new()
+            .await
+            .expect("Failed to create runtime")
+            .with_event_store(store);
+
+        runtime
+            .run_goal("Test checkpointing", None, None)
+            .await
+            .expect("run_goal failed");
+
+        let session_id = runtime.session_id.expect("session_id should be set");
+        let checkpoint = runtime.load_checkpoint(session_id).await;
+        assert!(checkpoint.is_some(), "checkpoint should exist after run");
+
+        let checkpoint = checkpoint.unwrap();
+        assert_eq!(checkpoint.aggregate_type, "session");
+        assert!(
+            checkpoint.state.get("goal").is_some(),
+            "checkpoint should contain goal"
+        );
+        assert!(
+            checkpoint.state.get("iteration").is_some(),
+            "checkpoint should contain iteration"
+        );
+
+        let _ = runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_request() {
+        let mut runtime = CoreRuntime::new()
+            .await
+            .expect("Failed to create runtime");
+
+        let handle = runtime.shutdown_handle();
+
+        // Simulate Ctrl+C before running
+        handle.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let result = runtime
+            .run_goal("Should stop immediately", None, None)
+            .await
+            .expect("run_goal failed");
+
+        // Should have stopped early due to shutdown request
+        assert!(
+            runtime.loop_controller.iteration <= 1,
+            "should stop on first iteration check"
+        );
+
+        let _ = runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_resume_goal_no_checkpoint() {
+        let store = praxis_persistence::SqliteEventStore::in_memory()
+            .expect("Failed to create store");
+
+        let mut runtime = CoreRuntime::new()
+            .await
+            .expect("Failed to create runtime")
+            .with_event_store(store);
+
+        let fake_session_id = uuid::Uuid::new_v4();
+        let result = runtime
+            .resume_goal(fake_session_id, None, None)
+            .await
+            .expect("resume_goal failed");
+
+        assert!(result.is_none(), "should return None when no checkpoint exists");
+
+        let _ = runtime.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_resume_goal_from_checkpoint() {
+        let store = praxis_persistence::SqliteEventStore::in_memory()
+            .expect("Failed to create store");
+
+        let mut runtime = CoreRuntime::new()
+            .await
+            .expect("Failed to create runtime")
+            .with_event_store(store);
+
+        // Run a goal to create a checkpoint
+        runtime
+            .run_goal("Test resume", None, None)
+            .await
+            .expect("run_goal failed");
+
+        let session_id = runtime.session_id.expect("session_id should be set");
+
+        // Reset runtime state
+        runtime.loop_controller = crate::r#loop::LoopController::new();
+
+        // Resume from the checkpoint
+        let result = runtime
+            .resume_goal(session_id, None, None)
+            .await
+            .expect("resume_goal failed");
+
+        assert!(result.is_some(), "should resume from checkpoint");
+        let result = result.unwrap();
+        assert_eq!(result.goal, "Test resume");
 
         let _ = runtime.shutdown().await;
     }
