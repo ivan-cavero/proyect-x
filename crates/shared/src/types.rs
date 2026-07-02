@@ -12,9 +12,6 @@ pub type GoalId = String;
 pub type TaskId = Uuid;
 pub type PhaseId = String;
 pub type ConversationId = Uuid;
-pub type OrganizationId = Uuid;
-pub type TeamId = Uuid;
-pub type UserId = Uuid;
 pub type EventId = Uuid;
 
 // ─── Priority ──────────────────────────────────────────────────

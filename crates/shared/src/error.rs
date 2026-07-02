@@ -75,16 +75,6 @@ pub enum ProjectXError {
     #[error("API key not found: {0}")]
     ApiKeyNotFound(String),
 
-    // ─── Enterprise errors ─────────────────────────────────
-    #[error("Not authorized: {0}")]
-    NotAuthorized(String),
-
-    #[error("Organization not found")]
-    OrganizationNotFound,
-
-    #[error("Plan limit exceeded: {0}")]
-    PlanLimitExceeded(String),
-
     // ─── IO ────────────────────────────────────────────────
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

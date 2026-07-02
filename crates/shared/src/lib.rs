@@ -7,7 +7,6 @@ pub mod types;
 pub mod protocol;
 pub mod config;
 pub mod error;
-pub mod tenant;
 
 /// Prelude module: re-exports the most commonly used types.
 pub mod prelude {
@@ -15,5 +14,4 @@ pub mod prelude {
     pub use crate::error::*;
     pub use crate::protocol::*;
     pub use crate::types::*;
-    pub use crate::tenant::*;
 }
